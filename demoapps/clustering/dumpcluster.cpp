@@ -7,12 +7,12 @@ extern advanced_config ac;
 void print_point(FILE * f, vertex_data & data){
    fprintf(f, "\t[");
    bool first = true;
-   for (int i=0; i< data.datapoint.nnz(); i++){
+   FOR_ITERATOR_(i, data.datapoint){
       if (!first){
 	fprintf(f, " ");
       }
       else first = false;
-      fprintf(f, "%d:%g", data.datapoint.get_nz_index(i), data.datapoint.get_nz_data(i));
+      fprintf(f, "%d:%g", get_nz_index(data.datapoint, i), get_nz_data(data.datapoint, i));
    }
    fprintf(f, "]\n");
 }
@@ -21,7 +21,7 @@ void print_point(FILE * f, vertex_data & data){
 
 void print_points_for_cluster(FILE * f, int cluster_id){
   for (int i=0; i< ps.M; i++){
-     vertex_data & data = ps.g->vertex_data(i);
+     vertex_data & data = ps.g<graph_type>()->vertex_data(i);
      if (data.current_cluster == cluster_id)
         print_point(f, data);
 
@@ -34,7 +34,7 @@ void find_radius(double * radius){
    
   memset(radius, 0, sizeof(double)*ac.K);
   for (int i=0; i<ps.M; i++){
-     vertex_data & data = ps.g->vertex_data(i);
+     vertex_data & data = ps.g<graph_type>()->vertex_data(i);
      if (radius[data.current_cluster] < data.min_distance)
        radius[data.current_cluster] = data.min_distance;
    }
@@ -53,7 +53,7 @@ void dumpcluster(){
    double * radius = new double[ac.K];
    find_radius(radius);
 
-    for (int i=0; i< ac.K; i++){
+    for (int i=0; i< (int)ps.clusts.cluster_vec.size(); i++){
       fprintf(f, "CL-%d { n=%d c=[", i, ps.clusts.cluster_vec[i].num_assigned_points);
        bool first = true;
         for (int j=0; j< ps.N; j++){

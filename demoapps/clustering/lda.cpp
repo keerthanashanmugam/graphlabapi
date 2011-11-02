@@ -13,7 +13,7 @@ void normalize_matrix_col (double **dst, double **src, int rows, int cols);
 void normalize_matrix_row (double **dst, double **src, int rows, int cols);
 double lda_lik (double **beta, double **gammas, int m);
 int converged (double *u, double *v, int n, double threshold);
-void fill_output_lda();
+//void fill_output_lda();
 
 double *alpha;
 double **beta;
@@ -98,7 +98,7 @@ lda_learn (double *alpha, double **beta)
         n=ps.M;
 
 	for (i = 0; i < ac.K; i++)
-		alpha[i] = itpp::randu();
+		alpha[i] = randu();
 	for (i = 0, z = 0; i < ac.K; i++)
 		z += alpha[i];
 	for (i = 0; i < ac.K; i++)
@@ -183,7 +183,7 @@ lda_learn (double *alpha, double **beta)
 			//vbem(dp, gamma, q, nt, pnt, ap,
 			//     alpha, (const double **)beta, dp->len, ac.K, ac.em_max_inner_iter);
 			//accum_gammas(gammas, _gamma, i, ac.K);
-			accum_betas(betas, ac.K, ps.g->vertex_data(i));
+			accum_betas(betas, ac.K, ps.g<graph_type>()->vertex_data(i));
 		}
 		ps.counter[LDA_ACCUM_BETA] += tt.current_time();
 		printf("%g) iteration %d/%d.. starting M-step\n", ps.gt.current_time(), t + 1, ac.iter);
@@ -231,7 +231,7 @@ lda_learn (double *alpha, double **beta)
 	}
  
 
-        fill_output_lda();
+        //fill_output_lda();
        
 	free_dmatrix(gammas, n);
 	free_dmatrix(betas, ps.N);
@@ -239,19 +239,22 @@ lda_learn (double *alpha, double **beta)
 	return;
 }
 
-
+/*
 void fill_output_lda(){
 
-     ps.output_clusters = zeros(ps.K, ps.N);
+     //ps.output_clusters = zeros(ps.K, ps.N);
         //for (int i=0; i<ps.K; i++)
         //  ps.output_clusters.set_row(i, ps.clusts.cluster_vec[i].location);
      //TODO
      //
      ps.output_assignements = zeros(ps.M, ac.K);
      for (int i=0; i< ps.M; i++){ 
-        ps.output_assignements.set_row(i,vec(gammas[i], ac.K));
+        flt_dbl_vec row(ac.K);
+        for (int j=0; j< ac.K; j++)
+           row[j] = gammas[i][j];
+        set_row(ps.output_assignements,i,row);
      }	
-}
+}*/
 
 /*void
 accum_gammas (double **gammas, double *_gamma, int n, int K)
@@ -266,12 +269,10 @@ accum_gammas (double **gammas, double *_gamma, int n, int K)
 void
 accum_betas (double **betas, int K, vertex_data & data)
 {
-	int i, k;
-	int n = data.datapoint.nnz();
-
-	for (i = 0; i < n; i++){
-		int id = data.datapoint.get_nz_index(i);
-                int cnt = (int)data.datapoint.get_nz_data(i);
+	int k;
+        FOR_ITERATOR_(i, data.datapoint){
+		int id = get_nz_index(data.datapoint, i);
+                int cnt = (int)get_nz_data(data.datapoint, i);
 		for (k = 0; k < ac.K; k++)
 			betas[id][k] += data.distances[i*ac.K+k] * cnt;
         }
@@ -312,11 +313,12 @@ lda_lik (double **beta, double **gammas, int m)
 {
 	double **egammas;
 	double z, lik;
-	int i, j, k;
-	int n;
+	int i, k;
 	lik = 0;
-	graphlab::timer t; t.start();
-	
+        if (ps.iiter == ac.iter - 1)
+          ps.output_assignements = zeros(ps.M, ac.K);
+ 	graphlab::timer t; t.start();
+       	
 	
 	if ((egammas = dmatrix(m, ac.K)) == NULL) {
 		fprintf(stderr, "lda_likelihood:: cannot allocate egammas.\n");
@@ -326,13 +328,15 @@ lda_lik (double **beta, double **gammas, int m)
 	
 	for (i = 0; i < ps.M; i++)
 	{
-	        vertex_data &data = ps.g->vertex_data(i);
-		n = data.datapoint.nnz();
-		for (j = 0; j < n; j++) {
-			int pos = data.datapoint.get_nz_index(j);
-		        int cnt = data.datapoint.get_nz_data(j);
+	        vertex_data &data = ps.g<graph_type>()->vertex_data(i);
+		FOR_ITERATOR_(j, data.datapoint){
+			int pos = get_nz_index(data.datapoint, j);
+		        int cnt = get_nz_data(data.datapoint, j);
 			for (k = 0, z = 0; k < ac.K; k++)
 				z += beta[pos][k] * egammas[i][k];
+                        if (ps.iiter == ac.iter - 1 ) //last iteration
+			    for (k = 0; k < ac.K; k++)
+                                set_val(ps.output_assignements,i,k, beta[pos][k]*egammas[i][k]);
 			lik += cnt * log(z);
 		}
 	}
@@ -341,8 +345,8 @@ lda_lik (double **beta, double **gammas, int m)
         ps.counter[LDA_LIKELIHOOD] += t.current_time();
 	return lik;
 
-}
 
+}
 
 void lda_em_update_function(gl_types::iscope & scope,
 	                    gl_types::icallback & scheduler)
@@ -358,10 +362,10 @@ void lda_em_update_function(gl_types::iscope & scope,
         scratch_buffer & myscratch = scratch[thread_id];
 
         vertex_data &data = scope.vertex_data();
-        int L = data.datapoint.nnz();
+        int L = nnz(data.datapoint);
 
         if (data.distances.size() == 0)
-          data.distances = zeros(data.datapoint.nnz() * ac.K);
+          data.distances = zeros(L * ac.K);
 
         double L_over_K = (double)L / ac.K;
 	for (k = 0; k < ac.K; k++)
@@ -374,10 +378,12 @@ void lda_em_update_function(gl_types::iscope & scope,
 			myscratch.ap[k] = exp(psi(alpha[k] + myscratch.nt[k]));
 
 		/* accumulate q */
-		for (l = 0; l < L; l++){
-	                int pos = data.datapoint.get_nz_index(l);
+                l= 0;
+                FOR_ITERATOR_(s, data.datapoint){
+	                int pos = get_nz_index(data.datapoint, s);
 			for (k = 0; k < ac.K; k++)
 				myscratch.q[l][k] = beta[pos][k] * myscratch.ap[k];
+                        l++;
                 }
 		/* normalize q */
 		for (l = 0; l < L; l++) {
@@ -390,11 +396,13 @@ void lda_em_update_function(gl_types::iscope & scope,
 		/* vb-mstep */
 		for (k = 0; k < ac.K; k++) {
 			z = 0;
-			for (l = 0; l < L; l++){
-				int cnt = (int)data.datapoint.get_nz_data(l);
+                        l = 0;
+                        FOR_ITERATOR_(s, data.datapoint){
+				int cnt = (int)get_nz_data(data.datapoint, s);
 				z += myscratch.q[l][k] * cnt;
                         }
 			myscratch.nt[k] = z;
+			l++;
 		}
 		/* converge? */
 		if ((j > 0) && converged(myscratch.nt, myscratch.pnt, ac.K, 1.0e-2))

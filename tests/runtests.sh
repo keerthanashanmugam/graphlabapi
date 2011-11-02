@@ -31,6 +31,8 @@ stdoutfname=$PWD/stdout.log
 stderrfname=$PWD/stderr.log
 rm -f $stdoutfname $stderrfname
 
+if [ $# -eq 0 ]; then
+
 echo "Running Standard unit tests"
 echo "==========================="
 ctest -O testlog.txt
@@ -39,28 +41,102 @@ ctest -O testlog.txt
 # delete extra generated files
 rm -f dg*
 
+fi
 
 echo 
 echo "Running application tests"
 echo "========================="
-echo "PMF..."
+echo "GraphLab collaborative filtering library"
+somefailed=0
 if [ -f ../demoapps/pmf/pmf ] && [ -f ../demoapps/pmf/itdiff ]; then
   pushd . > /dev/null
   cd ../demoapps/pmf
   echo "---------PMF-------------" >> $stdoutfname
   echo "---------PMF-------------" >> $stderrfname
-  ./pmf  smalltest 0 --scheduler="round_robin(max_iterations=10)" --float=true --ncpus=1  >> $stdoutfname 2>> $stderrfname
-  if ./itdiff smalltest20.out smalltest.out ; then
-    echo "PASS"
+  OUTFILE=smalltest.out
+  ./pmf --show_version=true
+  if [ $? -eq 2 ]; then
+    echo "detected Eigen based pmf"
+    OUTFILE=smalltest_eigen.out
   else
-    echo "FAIL: Output differs!"
-    exit 1
+    echo "detected it++ based pmf"
   fi
+  rm -f smalltest-20-21.out
+  echo "********************TEST1************************" >> $stdoutfname
+  ./pmf smalltest 0 --scheduler="round_robin(max_iterations=20,block_size=1)" --ncpus=1 --float=true --debug=true >> $stdoutfname 2>> 1 
+  
+  if ./itdiff smalltest-20-21.out $OUTFILE ; then
+    echo "PASS TEST 1 (Alternating least sqaures)"
+  else
+     somefailed=1
+    echo "FAIL: Output differs!"
+  fi
+  echo "********************TEST2************************" >> $stdoutfname
+  ./pmf --unittest 1 --ncpus=1 --debug=true >> $stdoutfname 2>> 1
+  if [ $? -eq 0 ]; then
+     echo "PASS TEST 2 (Alternating least squares)"
+  else
+     somefailed=1
+     echo "FAIL --unittest=1"
+  fi
+  echo "********************TEST3************************" >> $stdoutfname
+  ./pmf --unittest 71 --ncpus=1 --debug=true >> $stdoutfname 2>> 1
+  if [ $? -eq 0 ]; then
+     echo "PASS TEST 3 (Lanczos)"
+  else
+     somefailed=1
+     echo "FAIL --unittest=71 (Lanczos)"
+  fi
+  echo "********************TEST4************************" >> $stdoutfname
+  ./pmf --unittest 91 --ncpus=1 --debug=true >> $stdoutfname 2>> 1
+  if [ $? -eq 0 ]; then
+     echo "PASS TEST 4 (Weighted ALS)"
+  else
+     somefailed=1
+     echo "FAIL --unittest=91 (weighted alternating least squares)"
+  fi
+  echo "********************TEST5************************" >> $stdoutfname
+ ./pmf --unittest 101 --ncpus=1 >> $stdoutfname 2>> 1 
+  if [ $? -eq 0 ]; then
+     echo "PASS TEST 5 (CoSaMP)"
+  else
+     echo "FAIL --unittest=101 (CoSaMP)"
+     somefailed=1
+  fi
+  echo "********************TEST6************************" >> $stdoutfname
+ ./pmf --unittest 131  >> $stdoutfname 2>> 1 
+  if [ $? -eq 0 ]; then
+     echo "PASS TEST 6 (SVD)"
+  else
+     echo "FAIL --unittest=131 (SVD)"
+     somefailed=1
+  fi
+ 
   popd  > /dev/null
+
+  if [ $somefailed == 1 ]; then
+     echo "**** FAILURE LOG **************" >> $stdoutfname
+     echo "**** CONFIGURE.DEPS **************" >> $stdoutfname
+     cat ../../configure.deps >> $stdoutfname
+     echo "**** CONFIG.LOG **************" >> $stdoutfname
+     cat ../../config.log >> $stdoutfname
+     echo "**** SYSTEM STATS **************" >> $stdoutfname
+     echo `date` >> $stdoutfname
+     echo `uname -a` >> $stdoutfname
+     echo `echo $USER` >> $stdoutfname
+     echo "Some of the tests failed".
+     echo "Please email stdout.log to danny.bickson@gmail.com"
+     echo "Thanks for helping improve GraphLab!"
+  fi
+
+
 else
   echo "PMF not found. "
 fi
 echo
+
+
+
 
 if [ -f ../demoapps/demo/demo ]; then
   pushd . > /dev/null

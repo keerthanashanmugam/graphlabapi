@@ -26,5 +26,5 @@ tar -vz \
     graphlabapi
     
 
-
+ls -al graphlabapi/dist | tail -n 1
 

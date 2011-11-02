@@ -52,6 +52,7 @@
 #include <boost/preprocessor.hpp>
 #include <graphlab/rpc/function_arg_types_def.hpp>
 
+
 namespace graphlab {
 
 
@@ -98,6 +99,7 @@ struct dc_init_param{
 
 #define DEFAULT_NUMHANDLERTHREADS 8
 #define DEFAULT_COMMTYPE TCP_COMM
+#define MAX_N_PROCS 64
 
 // forward declaration for dc services
 class dc_services;
@@ -188,7 +190,7 @@ class distributed_control{
   thread_group fcallhandlers;
   
   /// a queue of functions to be executed
-  multi_blocking_queue<function_call_block> fcallqueue;
+  std::vector<blocking_queue<function_call_block> > fcallqueue;
   
   /// A map of function name to dispatch function. Used for "portable" calls
   dc_impl::dispatch_map_type portable_dispatch_call_map;

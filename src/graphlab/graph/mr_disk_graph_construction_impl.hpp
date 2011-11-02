@@ -24,6 +24,7 @@
 #ifndef GRAPHLAB_MR_DISK_GRAPH_CONSTRUCTION_IMPL_HPP
 #define GRAPHLAB_MR_DISK_GRAPH_CONSTRUCTION_IMPL_HPP
 #include <map>
+#include <unistd.h>
 #include <omp.h>
 #include <graphlab/graph/disk_graph.hpp>
 #include <graphlab/serialization/serialization_includes.hpp>
@@ -55,124 +56,73 @@ namespace graphlab {
       size_t num_local_vertices;
       size_t num_local_edges;
       size_t max_color;
-      std::string filename;
+      std::string filename; 
+      std::string base_atom_filename;  
       std::map<uint16_t, uint32_t>  adjacent_atoms;
       void save(oarchive& oarc) const {
         oarc << num_local_vertices << num_local_edges
-             << max_color << filename << adjacent_atoms;
+             << max_color << filename << base_atom_filename << adjacent_atoms;
       }
       void load(iarchive& iarc) {
         iarc >> num_local_vertices >> num_local_edges
-             >> max_color >> filename >> adjacent_atoms;
+             >> max_color >> filename >> base_atom_filename >> adjacent_atoms;
       }
     };
 
 
     template <typename VertexData, typename EdgeData>
     atom_properties merge_parallel_disk_atom(std::vector<std::string> disk_atom_files, 
-                                             std::string output_disk_atom,
-                                             size_t idx) {
-      std::vector<disk_atom*> atoms;
+                                             std::string base_atom_filename,
+                                             size_t idx,
+                                             disk_graph_atom_type::atom_type atomtype) {
+
+      std::vector<write_only_disk_atom*> atoms;
       atoms.resize(disk_atom_files.size());
   
       // open the atoms 
       for (size_t i = 0;i < disk_atom_files.size(); ++i) {
-        atoms[i] = new disk_atom(disk_atom_files[i], idx);
+        atoms[i] = new write_only_disk_atom(disk_atom_files[i], idx, false);
+      }
+      std::string output_disk_atom = base_atom_filename;
+      // create the output store
+      graph_atom* atomout = NULL;
+      if (atomtype == disk_graph_atom_type::MEMORY_ATOM) {
+        output_disk_atom += ".fast";
+        unlink(output_disk_atom.c_str());
+        atomout = new memory_atom(output_disk_atom, idx);
+      }
+      else if (atomtype == disk_graph_atom_type::WRITE_ONLY_ATOM) {
+        output_disk_atom += ".dump";
+        unlink(output_disk_atom.c_str());
+        atomout = new write_only_disk_atom(output_disk_atom, idx, true);
+      }
+      else if (atomtype == disk_graph_atom_type::DISK_ATOM) {
+        unlink(output_disk_atom.c_str());
+        atomout = new disk_atom(output_disk_atom, idx);
       }
 
-      // create the output store
-      disk_atom atomout(output_disk_atom, idx);
-      atomout.clear();
+      atomout->clear();
 
       volatile uint32_t max_color = 0;
       // iterate through each database, joining the keys as we see it
-#pragma omp parallel for
-      for (int i = 0;i < (int)atoms.size(); ++i) {
-        // open a cursor
-        std::string key, val;
-        disk_atom::storage_type::Cursor* cur = atoms[i]->get_db().cursor();
-        cur->jump();
-    
-        // begin iteration
-        while (cur->get(&key, &val, true)) {
-          ASSERT_GT(key.length(), 0);
-          char c = key[0];
-      
-          // we only need to track 4 entries
-          // v (vertex), e (edge) , c (color) and h (dht). 
 
-          if (c == 'v') {
-            // vertex.
-            boost::iostreams::stream<boost::iostreams::array_source> 
-              istrm(val.c_str(), val.length());   
-            iarchive iarc(istrm);
-            uint16_t owner;
-            iarc >> owner;
-            vertex_id_type vid = vertex_key_to_id(key);
-            // if has data, set the data
-            istrm.peek();
-            if (!istrm.eof()) {
-              VertexData vdata;
-              iarc >> vdata;
-              ASSERT_EQ(owner, idx);
-              // this will overwrite all other "skipped" vertices
-              atomout.add_vertex(vid, owner, vdata);
-            }
-            else {
-              atomout.add_vertex_skip(vid, owner);
-            }
-          }
-          else if (c == 'e') {
-            // edge
-            std::pair<vertex_id_type, vertex_id_type> edge = edge_key_to_id(key);
-            if (val.length() > 0) {
-              EdgeData edata;
-              boost::iostreams::stream<boost::iostreams::array_source> 
-                istrm(val.c_str(), val.length());   
-              iarchive iarc(istrm);
-              iarc >> edata;
-              atomout.add_edge(edge.first, edge.second, edata);
-              atomout.inc_numlocale();
-            }
-            else {
-              atomout.add_edge_skip(edge.first, edge.second);
-            }
-          }
-          else if (c == 'c') {
-            // color
-            vertex_id_type vid = vertex_key_to_id(key);       
-            uint32_t color = *reinterpret_cast<const uint32_t*>(val.c_str());
-            atomout.set_color(vid, color);
-            while(max_color < color) {
-              uint32_t old_max_color = max_color;
-              uint32_t new_max_color = std::max(color, old_max_color);
-              // no op if no change
-              if (new_max_color == old_max_color || 
-                  atomic_compare_and_swap(max_color, old_max_color, new_max_color)) {
-                break;
-              }
-            }
-          }
-          else if (c == 'h') {
-            vertex_id_type vid = vertex_key_to_id(key);       
-            uint16_t owner= *reinterpret_cast<const uint16_t*>(val.c_str());
-            atomout.set_owner(vid, owner);
-          }
-        }
-        delete cur;
+      for (size_t i = 0;i < atoms.size(); ++i) {
+        atoms[i]->play_back(atomout);
       }
-      atomout.synchronize();
+      atomout->synchronize();
       atom_properties ret;
-      ret.adjacent_atoms = atomout.enumerate_adjacent_atoms();
-      ret.num_local_vertices = atomout.num_local_vertices();
-      ret.num_local_edges = atomout.num_local_edges();
+      ret.adjacent_atoms = atomout->enumerate_adjacent_atoms();
+      ret.num_local_vertices = atomout->num_vertices();
+      ret.num_local_edges = atomout->num_edges();
       ret.max_color = max_color;
       ret.filename = output_disk_atom;
-      //std::cout << idx << " " << ret.num_local_vertices << " " << ret.num_local_edges << "\n";
+      ret.base_atom_filename = base_atom_filename;
+      std::cout << "Combined atom " << idx << " " << ret.num_local_vertices << " " << ret.num_local_edges << "\n";
 
       for (size_t i = 0;i < disk_atom_files.size(); ++i) {
         delete atoms[i];
       }
+      delete atomout;
       return ret;
     }
 
@@ -190,7 +140,7 @@ namespace graphlab {
         // i is the current atom index
         size_t i = iter->first;
         idx.atoms[i].protocol = "file";
-        idx.atoms[i].file = iter->second.filename;
+        idx.atoms[i].file = iter->second.base_atom_filename;
         idx.atoms[i].nverts = iter->second.num_local_vertices;
         idx.atoms[i].nedges = iter->second.num_local_edges;
         std::map<uint16_t, uint32_t>::const_iterator iteradj = iter->second.adjacent_atoms.begin();

@@ -1,8 +1,9 @@
-#include "pmf.h"
+//#include "pmf.h"
 
+int do_main(int argc, const char * argv[]);
 
 //main function 
 int main(int argc,  const char *argv[]) {
-   do_main(argc, argv);
+   return do_main(argc, argv);
 }
 

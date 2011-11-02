@@ -1,144 +1,259 @@
-#include <itpp/itbase.h>
-#include <itpp/itstat.h>
-#include <itpp/stat/misc_stat.h>
 #include "clustering.h"
+#include <fstream>
 
-using namespace itpp;
 extern problem_setup ps;
 
 //assign sparse vector value v2 into v1
-void assign(vec & v1, sparse_vec & v2){
-  v1 = zeros(ps.N);
-  for (int i=0; i< (v2).nnz(); i++){
-     v1[v2.get_nz_index(i)] = v2.get_nz_data(i);
-  }
-
-}
-
-double get(sparse_vec & v1, int pos){
-  for (int i=0; i< v1.nnz(); i++){
-     if (v1.get_nz_index(i) < pos)
-	continue;
-     else if (v1.get_nz_index(i) > pos)
-	break;
-     else if (v1.get_nz_index(i) == pos)
-	return v1.get_nz_data(i);
-  }
-  return 0;
-}
-
-
-double min( sparse_vec & dvec){
- 
-  double dmin = 1e100;
-  for (int i=0; i< (dvec).nnz(); i++){
-     dmin = std::min(dmin, (dvec).get_nz_data(i));
-  }
-  return dmin;
-}
-
-double max( sparse_vec & dvec){
- 
-  double dmax = -1e100;
-  for (int i=0; i< (dvec).nnz(); i++){
-     dmax = std::max(dmax, (dvec).get_nz_data(i));
-  }
-  return dmax;
-}
-
-double sum( sparse_vec & dvec){
- 
-  double sum = 0;
-  for (int i=0; i< (dvec).nnz(); i++){
-     sum += (dvec).get_nz_data(i);
-  }
-  return sum;
-}
-double sum_sqr( sparse_vec & dvec){
- 
-  double sum = 0;
-  for (int i=0; i< (dvec).nnz(); i++){
-     sum += ((dvec).get_nz_data(i)*(dvec).get_nz_data(i));
-  }
-  return sum;
-}
-
-sparse_vec fabs( sparse_vec & dvec1){
-   sparse_vec ret = dvec1;
-   for (int i=0; i< ret.nnz(); i++){
-       ret.set(ret.get_nz_index(i), fabs(ret.get_nz_data(i)));
-   }
-   return ret;
-	
-};
-
-sparse_vec minus(sparse_vec &v1,sparse_vec &v2){
-  sparse_vec ret(ps.N, v1.nnz() + v2.nnz());
-  for (int i=0; i< v1.nnz(); i++){
-      ret.add_elem(v1.get_nz_index(i), v1.get_nz_data(i) - get(v2, v1.get_nz_index(i)));
-  }
-  for (int i=0; i< v2.nnz(); i++){
-      ret.add_elem(v2.get_nz_index(i), get(v1, v2.get_nz_index(i)) - v2.get_nz_data(i));
-  }
-  return ret;
-}
-vec minus( sparse_vec &v1,  vec &v2){
-  vec ret = zeros(v2.size());
-  for (int i=0; i< v2.size(); i++){
-      ret.set(i, get(v1, i) - v2[i]);
-  }
-  return ret;
-}
-void plus( vec &v1,  sparse_vec &v2){
-  for (int i=0; i< v2.nnz(); i++){
-      v1[v2.get_nz_index(i)] += v2.get_nz_data(i);
-  }
-}
-void plus_mul( vec &v1,  sparse_vec &v2, double factor){
-  for (int i=0; i< v2.nnz(); i++){
-      v1[v2.get_nz_index(i)] += factor*v2.get_nz_data(i);
-  }
-}
-void minus( vec &v1, sparse_vec &v2){
-  for (int i=0; i< v2.nnz(); i++){
-      v1[v2.get_nz_index(i)] -= v2.get_nz_data(i);
-  }
-}
-
-
-
+//assign sparse vector value v2 into v1
 
 
 void test_math(){
-   sparse_vec v1;
-   sparse_vec v2;
-   v1.add_elem(1,1.0);
-   v2.add_elem(2,2.0);
+   sparse_vec v1(4);
+   sparse_vec v2(4);
+   set_new(v1,1,1.0);
+   set_new(v2,2,2.0);
    sparse_vec v3 = minus(v1, v2);
-   assert(v3.get_nz_data(0) == 1.0);
-   assert(v3.get_nz_data(1) == - 2.0);
-   assert(v3.nnz() == 2);
+   assert(get_nz_data(v3,0) == 1.0);
+   assert(get_nz_data(v3,1) == - 2.0);
+   assert(nnz(v3)== 2);
+   assert(get_val(v1, 1) == 1.0);
+   assert(get_val(v2, 2) == 2.0);
+
+   assert(sum(v1) == 1.0);
+   assert(sum(v2) == 2.0);
+   assert(sum(v3) == -1.0);
 
    sparse_vec v4 = fabs(v3); 
-   assert(v4.get_nz_data(0) == 1.0);
-   assert(v4.get_nz_data(1) == 2.0);
-   assert(v4.nnz() == 2);
+   assert(nnz(v4) == 2);
+   assert(get_nz_data(v4,0) == 1.0);
+   assert(get_nz_data(v4,1) == 2.0);
 
    double sqr = sum_sqr(v4);
    assert(sqr == 5);
-   assert(v4.nnz() == 2);
+   assert(nnz(v4) == 2);
 
    double mmin = min(v4);
    assert(mmin = 1);
    double mmax = max(v4);
    assert(mmax = 2);
-
-   vec v5 = vec("1 2 3 4");
+   vec v5 = init_dbl_vec("1 2 3 4",4);
    plus(v5, v1);
    assert(v5[0] == 1);
    assert(v5[1] == 3);
-   assert(v5[2] == 5);
+   assert(v5[2] == 3);
    assert(v5[3] == 4);
    assert(v5.size() == 4);
+   minus(v5, v1);
+   assert(v5[0] == 1);
+   assert(v5[1] == 2);
+   assert(v5[2] == 3);
+   assert(v5[3] == 4);
+   assert(v5.size() == 4);
+ 
+   vec vcum = cumsum(v5);
+   assert(vcum[0] == 1);
+   assert(vcum[1] == 3);
+   assert(vcum[2] == 6);
+   assert(vcum[3] == 10);
+    
+   double dot = dot_prod(v5, v1);
+   assert(dot == 2);
 
+   dot = dot_prod(v5,v5);
+   assert(30 == dot);
+
+   dot = dot_prod(v1, v1);
+   assert(dot == 1);
+
+   vec powv = pow(v5, 2);
+   assert(powv[0] == 1);
+   assert(powv[1] == 4);
+   assert(powv[2] == 9);
+   assert(powv[3] == 16);
+   assert(get_nz_data(v1, 0) == 1.0);
+   set_new(v1, 18, 3.0);
+   assert(get_nz_data(v1,1) == 3.0);
+   //set_size(v1, 19);
+ 
+   assert(get_val(v5,0) == 1.0);
+   assert(get_val(v1,0) == 0); 
+   assert(get_val(v1,1) == 1.0); 
+   assert(get_val(v1,18) == 3.0); 
+
+   sparse_vec v6;
+   set_new(v6, 3, 4.2);
+   FOR_ITERATOR(i, v6){
+   set_div(v6, i, 2.0);
+   }
+   assert(get_nz_data(v6, 0) == 2.1);
+   assert(get_val(v6, 3) == 2.1);
+   assert(nnz(v6) == 1);
+
+   mat mymat = init_mat("1 2 3; 3 2 1; 1 2 3", 3, 3);
+
+   remove("stam");
+   it_file saved("stam");
+   saved << Name("vector");
+   saved << v5;
+   saved << Name("matrix");
+   saved << mymat;
+   saved.close();
+
+   vec v5_saved;
+   it_file loaded("stam");
+   loaded >> Name("vector");
+   loaded >> v5_saved;
+   assert(v5_saved.size() == 4);
+   assert(v5_saved[0] == 1);
+   assert(v5_saved[1] == 2);
+   assert(v5_saved[2] == 3);
+   assert(v5_saved[3] == 4);
+   loaded >> Name("matrix");
+   mat mymat2;
+   loaded >> mymat2;
+   assert(mymat2.rows() == 3 && mymat2.cols() == 3);
+   assert(get_val(mymat2, 0, 0) == 1.0);
+   assert(get_val(mymat2, 2, 2) == 3.0);
+
+
+   vec start = head(v5, 2);
+   assert(start.size() == 2);
+   assert(start[0] == 1);
+   assert(start[1] == 2);
+
+   ivec delvec(4);
+   delvec[0] = 1;
+   delvec[1] = 2;
+   delvec[2] = 3;  
+   delvec[3] = 4;
+   del(delvec,3);
+   assert(delvec.size() == 3);
+   assert(delvec[0] == 1);
+   assert(delvec[1] == 2);
+   assert(delvec[2] == 3);
+   del(delvec,1);
+   assert(delvec.size() == 2);
+   assert(delvec[0] == 1);
+   assert(delvec[1] == 3);
+
+   ivec delvec2(4);
+   delvec2[0] = 1;
+   delvec2[1] = 2;
+   delvec2[2] = 3;
+   delvec2[3] = 4;
+   del(delvec2, 0);
+   assert(delvec2.size() == 3);
+   assert(delvec2[0] = 2);
+}
+
+
+void test_fmath(){
+   sparse_fvec v1(4);
+   sparse_fvec v2(4);
+   set_new(v1,1,1.0);
+   set_new(v2,2,2.0);
+   sparse_fvec v3 = minus(v1, v2);
+   assert(get_nz_data(v3,0) == 1.0);
+   assert(get_nz_data(v3,1) == - 2.0);
+   assert(nnz(v3)== 2);
+   assert(get_val(v1, 1) == 1.0);
+   assert(get_val(v2, 2) == 2.0);
+
+   assert(sum(v1) == 1.0);
+   assert(sum(v2) == 2.0);
+   assert(sum(v3) == -1.0);
+
+   sparse_fvec v4 = fabs(v3); 
+   assert(nnz(v4) == 2);
+   assert(get_nz_data(v4,0) == 1.0);
+   assert(get_nz_data(v4,1) == 2.0);
+
+   float sqr = sum_sqr(v4);
+   assert(sqr == 5);
+   assert(nnz(v4) == 2);
+
+   float mmin = min(v4);
+   assert(mmin = 1);
+   float mmax = max(v4);
+   assert(mmax = 2);
+   fvec v5 = init_fvec("1 2 3 4",4);
+   plus(v5, v1);
+   assert(v5[0] == 1);
+   assert(v5[1] == 3);
+   assert(v5[2] == 3);
+   assert(v5[3] == 4);
+   assert(v5.size() == 4);
+   minus(v5, v1);
+   assert(v5[0] == 1);
+   assert(v5[1] == 2);
+   assert(v5[2] == 3);
+   assert(v5[3] == 4);
+   assert(v5.size() == 4);
+ 
+   fvec vcum = cumsum(v5);
+   assert(vcum[0] == 1);
+   assert(vcum[1] == 3);
+   assert(vcum[2] == 6);
+   assert(vcum[3] == 10);
+    
+   float dot = dot_prod(v5, v1);
+   assert(dot == 2);
+
+   dot = dot_prod(v5,v5);
+   assert(30 == dot);
+
+   dot = dot_prod(v1, v1);
+   assert(dot == 1);
+
+   fvec powv = pow(v5, 2);
+   assert(powv[0] == 1);
+   assert(powv[1] == 4);
+   assert(powv[2] == 9);
+   assert(powv[3] == 16);
+   assert(get_nz_data(v1, 0) == 1.0);
+   //set_new(v1, 18, 3.0);
+   //assert(get_nz_data(v1,1) == 3.0);
+   //set_size(v1, 19);
+ 
+   assert(get_val(v5,0) == 1.0);
+   assert(get_val(v1,0) == 0); 
+   assert(get_val(v1,1) == 1.0); 
+
+   sparse_fvec v6;
+   set_size(v6, 4);
+   set_new(v6, 3, 4.2);
+   FOR_ITERATOR_(i, v6){
+   set_div(v6, i, 2.0);
+   }
+   assert(powf(get_nz_data(v6, 0)- 2.1,2)<1e-10);
+   assert(powf(get_val(v6, 3)- 2.1,2)<1e-10);
+   assert(nnz(v6) == 1);
+
+   fmat mymat = init_fmat("1 2 3; 3 2 1; 1 2 3", 3, 3);
+
+   remove("stam");
+
+   ivec delvec(4);
+   delvec[0] = 1;
+   delvec[1] = 2;
+   delvec[2] = 3;  
+   delvec[3] = 4;
+   del(delvec,3);
+   assert(delvec.size() == 3);
+   assert(delvec[0] == 1);
+   assert(delvec[1] == 2);
+   assert(delvec[2] == 3);
+   del(delvec,1);
+   assert(delvec.size() == 2);
+   assert(delvec[0] == 1);
+   assert(delvec[1] == 3);
+
+   ivec delvec2(4);
+   delvec2[0] = 1;
+   delvec2[1] = 2;
+   delvec2[2] = 3;
+   delvec2[3] = 4;
+   del(delvec2, 0);
+   assert(delvec2.size() == 3);
+   assert(delvec2[0] = 2);
 }

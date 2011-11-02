@@ -187,8 +187,19 @@ namespace graphlab {
 
       std::cout << "dist_locking engine\n";   
       std::cout << std::string(50, '-') << std::endl;
-      std::cout << "Options: \n";
-      std::cout << "max_deferred_tasks_per_node = [integer, default = 1000]\n";
+      std::cout << "Options: \n"
+                << "max_deferred_tasks_per_node = [integer, default = 1000]\n"
+                << "chandy_misra = [int, default = 0, "
+                << "If non-zero, uses the chandy misra locking method. "
+                << " Only supports edge scopes]\n"
+                << "snapshot_interval = [integer, default = 0, "
+                << "If non-zero, snapshots approximately this many updates]\n"
+                << "snapshot2_interval = [integer, default = 0, "
+                << "Fully asynchronous snapshotting. If non-zero, "
+                << "snapshots approximately this many updates]\n"
+                << "strength_reduction = [integer, default = 0]\n"
+                << "priority_degree_limit = [integer, default = 0. If > 0, "
+                <<  "all vertices with more than this number of edges will have lock priority]\n";
       return false;
     } 
     set_ncpus(ncpus);

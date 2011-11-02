@@ -33,8 +33,8 @@
 #include <graphlab/scheduler/ischeduler.hpp>
 #include <graphlab/scope/iscope.hpp>
 #include <graphlab/graph/graph.hpp>
-
 #include <graphlab/engine/shared_memory_engine.hpp>
+#include <graphlab/core_base.hpp>
 
 
 
@@ -90,7 +90,7 @@ namespace graphlab {
      clearing of all scheduler tasks.
   */
   template <typename Graph, typename UpdateFunctor>
-  class core {
+  class core : public core_base {
   public:
     typedef Graph graph_type;
     typedef UpdateFunctor update_functor_type;

@@ -67,6 +67,34 @@ class deferred_rwlock{
       tail = I;
     }
   }
+  inline void insert_queue_head(request *I) {
+    if (head == NULL) {
+      head = I;
+      tail = I;
+    }
+    else {
+      I->next = head;
+      head = I;
+    }
+  }
+  
+  inline bool writelock_priority(request *I) {
+    I->next = NULL;
+    I->lockclass = QUEUED_RW_LOCK_REQUEST_WRITE;
+    lock.lock();
+    if (reader_count == 0 && writer == false) {
+      // fastpath
+      writer = true;
+      lock.unlock();
+      return true;
+    }
+    else {
+      insert_queue_head(I);
+      lock.unlock();
+      return false;
+    }
+  }
+  
   inline bool writelock(request *I) {
     I->next = NULL;
     I->lockclass = QUEUED_RW_LOCK_REQUEST_WRITE;
@@ -99,12 +127,40 @@ class deferred_rwlock{
     released = head;
     size_t numcompleted = 1;
     head = head->next;
+    request* readertail = released;
     while (head != NULL && head->lockclass == QUEUED_RW_LOCK_REQUEST_READ) {
+      readertail = head;
       head = head->next;
       numcompleted++;
     }
     reader_count += numcompleted;
     if (head == NULL) tail = NULL;
+    
+    // now released is the head to a reader list
+    // and head is the head of a writer list
+    // I want to go through the writer list and extract all the readers
+    // this essentially 
+    // splits the list into two sections, one containing only readers, and 
+    // one containing only writers.
+    // (reader biased locking)
+    if (head != NULL) {
+      request* latestwriter = head;
+      request* cur = head->next;
+      while (1) {
+        if (cur->lockclass == QUEUED_RW_LOCK_REQUEST_WRITE) {
+          latestwriter = cur;
+        }
+        else {
+          readertail->next = cur;
+          readertail = cur;
+          reader_count++;
+          numcompleted++;
+          latestwriter->next = cur->next;
+        }
+        if (cur == tail) break;
+        cur=cur->next;
+      }
+    }
     return numcompleted;
   }
   
@@ -146,6 +202,31 @@ class deferred_rwlock{
     else {
       // slow path. Insert into queue
       insert_queue(I);
+      if (head->lockclass == QUEUED_RW_LOCK_REQUEST_READ && writer == false) {
+        ret = complete_rdlock(released);
+      }
+      lock.unlock();
+      return ret;
+    }
+  }
+
+  inline size_t readlock_priority(request *I, request* &released)  {
+    released = NULL;
+    size_t ret = 0;
+    I->next = NULL;
+    I->lockclass = QUEUED_RW_LOCK_REQUEST_READ;
+    lock.lock();
+    // there are readers and no one is writing
+    if (head == NULL && writer == false) {
+      // fast path
+      ++reader_count;
+      lock.unlock();
+      released = I;
+      return 1;
+    }
+    else {
+      // slow path. Insert into queue
+      insert_queue_head(I);
       if (head->lockclass == QUEUED_RW_LOCK_REQUEST_READ && writer == false) {
         ret = complete_rdlock(released);
       }

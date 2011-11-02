@@ -111,6 +111,15 @@ namespace graphlab {
       return __sync_fetch_and_or(array + arrpos, mask) & mask;
     }
     
+    //! Atomically xors a bit with 1
+    inline bool xor_bit(uint32_t b) {
+      // use CAS to set the bit
+      uint32_t arrpos, bitpos;
+      bit_to_pos(b, arrpos, bitpos);
+      const size_t mask(size_t(1) << size_t(bitpos)); 
+      return __sync_fetch_and_xor(array + arrpos, mask) & mask;
+    }
+    
     /** Set the bit at position b to true returning the old value.
         Unlike set_bit(), this uses a non-atomic set which is faster,
         but is unsafe if accessed by multiple threads.
@@ -184,7 +193,7 @@ namespace graphlab {
         the position of the next bit set to true, and return true.
         If all bits after b are false, this function returns false.
     */
-    inline bool next_bit(uint32_t &b) {
+    inline bool next_bit(uint32_t &b) const {
       // use CAS to set the bit
       uint32_t arrpos, bitpos;
       bit_to_pos(b, arrpos, bitpos);
@@ -251,7 +260,7 @@ namespace graphlab {
     }
   
     // returns 0 on failure
-    inline uint32_t next_bit_in_block(const uint32_t& b, const size_t& block) {
+    inline uint32_t next_bit_in_block(const uint32_t& b, const size_t& block) const {
       // use CAS to set the bit
       size_t belowselectedbit = size_t(-1) - (((size_t(1) << b) - 1)|(size_t(1)<<b));
       size_t x = block & belowselectedbit ;
@@ -260,7 +269,7 @@ namespace graphlab {
     }
 
     // returns 0 on failure
-    inline uint32_t first_bit_in_block(const size_t& block) {
+    inline uint32_t first_bit_in_block(const size_t& block) const{
       // use CAS to set the bit
       if (block == 0) return 0;
       else return (uint32_t)__builtin_ctzl(block);
@@ -288,7 +297,7 @@ namespace graphlab {
     }
     
    /// Make a copy of the bitset db
-    fixed_dense_bitset(const fixed_dense_bitset &db) {
+    fixed_dense_bitset(const fixed_dense_bitset<len> &db) {
       *this = db;
     }
     
@@ -296,7 +305,7 @@ namespace graphlab {
     ~fixed_dense_bitset() {}
   
     /// Make a copy of the bitset db
-    inline fixed_dense_bitset& operator=(const fixed_dense_bitset& db) {
+    inline fixed_dense_bitset<len>& operator=(const fixed_dense_bitset<len>& db) {
       memcpy(array, db.array, sizeof(size_t) * arrlen);
       return *this;
     }
@@ -394,7 +403,7 @@ namespace graphlab {
         first bit set to true.
         If such a bit does not exist, this function returns false.
     */
-    inline bool first_bit(uint32_t &b) {
+    inline bool first_bit(uint32_t &b) const {
       for (size_t i = 0; i < arrlen; ++i) {
         if (array[i]) {
           b = (uint32_t)(i * (sizeof(size_t) * 8)) + first_bit_in_block(array[i]);
@@ -408,7 +417,7 @@ namespace graphlab {
         the position of the next bit set to true, and return true.
         If all bits after b are false, this function returns false.
     */
-    inline bool next_bit(uint32_t &b) {
+    inline bool next_bit(uint32_t &b) const {
       // use CAS to set the bit
       uint32_t arrpos, bitpos;
       bit_to_pos(b, arrpos, bitpos);
@@ -443,8 +452,6 @@ namespace graphlab {
 
     /// Deserializes this bitset from an archive
     inline void load(iarchive& iarc) {
-      if (array != NULL) free(array);
-      array = NULL;
       size_t l;
       size_t arl;
       iarc >> l >> arl;
@@ -455,9 +462,18 @@ namespace graphlab {
       }
     }
 
+    size_t popcount() const {
+      const uint32_t* tmp = reinterpret_cast<const uint32_t*>(array);
+      size_t ret = 0;
+      for (size_t i = 0;i < arrlen * (sizeof(size_t) / sizeof(uint32_t)); ++i) {
+        ret +=  __builtin_popcount(tmp[i]);
+      }
+      return ret;
+    }
+
   private:
    
-    inline size_t next_powerof2(size_t val) {
+    inline static size_t next_powerof2(size_t val) {
       --val;
       val = val | (val >> 1);
       val = val | (val >> 2);
@@ -479,7 +495,7 @@ namespace graphlab {
   
 
     // returns 0 on failure
-    inline uint32_t next_bit_in_block(const uint32_t &b, const size_t &block) {
+    inline uint32_t next_bit_in_block(const uint32_t &b, const size_t &block) const {
       // use CAS to set the bit
       size_t belowselectedbit = size_t(-1) - (((size_t(1) << b) - 1)|(size_t(1)<<b));
       size_t x = block & belowselectedbit ;
@@ -488,7 +504,7 @@ namespace graphlab {
     }
 
     // returns 0 on failure
-    inline uint32_t first_bit_in_block(const size_t &block) {
+    inline uint32_t first_bit_in_block(const size_t &block) const {
       // use CAS to set the bit
       if (block == 0) return 0;
       else return (uint32_t)__builtin_ctzl(block);

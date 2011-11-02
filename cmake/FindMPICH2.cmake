@@ -203,7 +203,7 @@ elseif (MPI_COMPILE_CMDLINE)
   # Extract the set of libraries to link against from the link command
   # line
   string(REGEX MATCHALL "-l([^\" ]+|\"[^\"]+\")" MPI_LIBNAMES "${MPI_LINK_CMDLINE}")
-
+  message(STATUS "MPI libnames: ${MPI_LIBNAMES}")
   # Determine full path names for all of the libraries that one needs
   # to link against in an MPI program
   set(MPI_LIBRARIES)
@@ -214,21 +214,23 @@ elseif (MPI_COMPILE_CMDLINE)
     if (MPI_LIB)
       list(APPEND MPI_LIBRARIES ${MPI_LIB})
     else (MPI_LIB)
-      message(SEND_ERROR "Unable to find MPI library ${LIB}")
+  #    message(STATUS "Unable to find MPI library ${LIB}")
     endif (MPI_LIB)
   endforeach(LIB)
   set(MPI_LIB "MPI_LIB-NOTFOUND" CACHE INTERNAL "Scratch variable for MPI detection" FORCE)
+
+  message(STATUS "MPI libraries: ${MPI_LIBRARIES}")
 
   # Chop MPI_LIBRARIES into the old-style MPI_LIBRARY and
   # MPI_EXTRA_LIBRARY.
   list(LENGTH MPI_LIBRARIES MPI_NUMLIBS)
   list(LENGTH MPI_LIBNAMES MPI_NUMLIBS_EXPECTED)
-  if (MPI_NUMLIBS EQUAL MPI_NUMLIBS_EXPECTED)
+#  if (MPI_NUMLIBS EQUAL MPI_NUMLIBS_EXPECTED)
     list(GET MPI_LIBRARIES 0 MPI_LIBRARY_WORK)
     set(MPI_LIBRARY ${MPI_LIBRARY_WORK} CACHE FILEPATH "MPI library to link against" FORCE)
-  else (MPI_NUMLIBS EQUAL MPI_NUMLIBS_EXPECTED)
-    set(MPI_LIBRARY "MPI_LIBRARY-NOTFOUND" CACHE FILEPATH "MPI library to link against" FORCE)
-  endif (MPI_NUMLIBS EQUAL MPI_NUMLIBS_EXPECTED)
+#  else (MPI_NUMLIBS EQUAL MPI_NUMLIBS_EXPECTED)
+#    set(MPI_LIBRARY "MPI_LIBRARY-NOTFOUND" CACHE FILEPATH "MPI library to link against" FORCE)
+#  endif (MPI_NUMLIBS EQUAL MPI_NUMLIBS_EXPECTED)
   if (MPI_NUMLIBS GREATER 1)
     set(MPI_EXTRA_LIBRARY_WORK ${MPI_LIBRARIES})
     list(REMOVE_AT MPI_EXTRA_LIBRARY_WORK 0)
@@ -246,6 +248,7 @@ else (MPI_COMPILE_CMDLINE)
     /usr/local/include 
     /usr/include 
     /usr/include/mpi
+    /usr/include/mpich2
     /usr/local/mpi/include
     "C:/Program Files/MPICH/SDK/Include" 
     "$ENV{SystemDrive}/Program Files/MPICH2/include"
@@ -261,7 +264,7 @@ else (MPI_COMPILE_CMDLINE)
   
   find_library(MPI_LIBRARY 
     NAMES mpi mpich msmpi
-    PATHS /usr/lib /usr/local/lib /usr/local/mpi/lib
+    PATHS /usr/lib /usr/local/lib /usr/local/mpi/lib 
     "C:/Program Files/MPICH/SDK/Lib" 
     "$ENV{SystemDrive}/Program Files/MPICH/SDK/Lib"
     "$ENV{SystemDrive}/Program Files/Microsoft Compute Cluster Pack/Lib/${MS_MPI_ARCH_DIR}"
@@ -273,7 +276,7 @@ else (MPI_COMPILE_CMDLINE)
 
   find_library(MPI_EXTRA_LIBRARY 
     NAMES mpi++
-    PATHS /usr/lib /usr/local/lib /usr/local/mpi/lib
+    PATHS /usr/lib /usr/local/lib /usr/local/mpi/lib 
     "C:/Program Files/MPICH/SDK/Lib" 
     DOC "Extra MPI libraries to link against.")
 

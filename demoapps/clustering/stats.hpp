@@ -26,18 +26,15 @@
 #ifndef _STATS_HPP
 #define _STATS_HPP
 
+#include "clustering.h"
 #include <graphlab/macros_def.hpp>
 
 extern advanced_config ac;
 extern problem_setup ps;
 
-double min(sparse_vec & dvec);
-double max(sparse_vec & dvec);
-double sum(sparse_vec & dvec);
-
 // calc statistics about matrix/tensor and exit  
 void calc_stats(){
-   graph_type * gr = ps.g;
+   graph_type * gr = ps.g<graph_type>();
 
   double avgval=0, minval=1e100, maxval=-1e100;
   int nz=0;
@@ -49,7 +46,7 @@ void calc_stats(){
       if (max(data->datapoint) > maxval)
 	 maxval = max(data->datapoint);
       
-      nz += ((sparse_vec)data->datapoint).nnz();
+      nz += nnz(data->datapoint);
       avgval += sum(data->datapoint);
   }
  

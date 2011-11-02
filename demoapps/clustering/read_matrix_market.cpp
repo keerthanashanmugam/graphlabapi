@@ -33,8 +33,8 @@ extern advanced_config ac;
 extern problem_setup ps;
 
 void init();
-
-void load_matrix_market(const char * filename, graph_type *_g)
+void compact(graph_type *g);
+void load_matrix_market(const char * filename, graph_type_kcores *_g, testtype type)
 {
     int ret_code;
     MM_typecode matcode;
@@ -43,6 +43,10 @@ void load_matrix_market(const char * filename, graph_type *_g)
 
     FILE * f = fopen(filename, "r");
     if (f== NULL){
+        if (type ==VALIDATION && ac.algorithm != ITEM_KNN && ac.algorithm != USER_KNN)
+	   return;
+        if (type == TEST)
+           return;
 	logstream(LOG_ERROR) << " can not find input file. aborting " << std::endl;
 	exit(1);
     }
@@ -74,7 +78,7 @@ void load_matrix_market(const char * filename, graph_type *_g)
     ps.M = M; ps.N = N; ps.K = ac.K;
 
     init();
-    add_vertices(_g); 
+    add_vertices(_g, type); 
 
     /* reseve memory for matrices */
 
@@ -84,11 +88,12 @@ void load_matrix_market(const char * filename, graph_type *_g)
 
     int I,J; 
     double val;
-
+    int step = nz/10;
 
     for (i=0; i<nz; i++)
     {
         fscanf(f, "%d %d %lg\n", &I, &J, &val);
+        //printf("Found row %d %d %g\n", I, J, val);        
         I--;  /* adjust from 1-based to 0-based */
         J--;
          if (ac.scalerating != 1.0)
@@ -96,10 +101,102 @@ void load_matrix_market(const char * filename, graph_type *_g)
          if (!ac.zero)
 	   assert(val!=0 );
         
-        assert(I< M);
-        assert(J< N);
+        assert(I >= 0 && I< M);
+        assert(J >=0 && J< N);
+        kcores_edge edge;
+        edge.weight = val;
+        _g->add_edge(I,J, edge);
+        _g->add_edge(J,I, edge);
+        if (i % step == 0)
+          logstream(LOG_INFO) << "Matrix market read " << i << " edges" << std::endl;
+    }
+    ps.L = nz;
+    fclose(f);
+
+}
+
+
+void load_matrix_market(const char * filename, graph_type *_g, testtype type)
+{
+    int ret_code;
+    MM_typecode matcode;
+    int M, N, nz;   
+    int i;
+
+    FILE * f = fopen(filename, "r");
+    if (f== NULL){
+        if (type == VALIDATION && ac.algorithm != ITEM_KNN && ac.algorithm != USER_KNN)
+           return;
+        if (type == TEST)
+           return;
+	logstream(LOG_ERROR) << " can not find input file. aborting " << std::endl;
+	exit(1);
+    }
+
+    if (mm_read_banner(f, &matcode) != 0)
+    {
+        logstream(LOG_ERROR) << "Could not process Matrix Market banner." << std::endl;
+        exit(1);
+    }
+
+    /*  This is how one can screen matrix types if their application */
+    /*  only supports a subset of the Matrix Market data types.      */
+
+    if (mm_is_complex(matcode) && mm_is_matrix(matcode) && 
+            mm_is_sparse(matcode) )
+    {
+        logstream(LOG_ERROR) << "sorry, this application does not support " << std::endl << 
+          "Market Market type: " << mm_typecode_to_str(matcode) << std::endl;
+        exit(1);
+    }
+
+    /* find out size of sparse matrix .... */
+
+    if ((ret_code = mm_read_mtx_crd_size(f, &M, &N, &nz)) !=0){
+       logstream(LOG_ERROR) << "failed to read matrix market cardinality size " << std::endl; 
+       exit(1);
+    }
+
+    ps.M = M; ps.N = N; ps.K = ac.K;
+
+    if (ps.algorithm == SVD_EXPERIMENTAL && ac.reduce_mem_consumption && ac.svd_compile_eigenvectors)
+      return;
+
+
+    init();
+    add_vertices(_g, type); 
+
+    /* reseve memory for matrices */
+
+    /* NOTE: when reading in doubles, ANSI C requires the use of the "l"  */
+    /*   specifier as in "%lg", "%lf", "%le", otherwise errors will occur */
+    /*  (ANSI C X3.159-1989, Sec. 4.9.6.2, p. 136 lines 13-15)            */
+
+    int I,J; 
+    double val;
+    int step=nz/10;
+
+    for (i=0; i<nz; i++)
+    {
+        fscanf(f, "%d %d %lg\n", &I, &J, &val);
+        //printf("%d) Found row %d %d %g\n", i, I, J, val);        
+        I--;  /* adjust from 1-based to 0-based */
+        J--;
+         if (ac.scalerating != 1.0)
+	     val /= ac.scalerating;
+         if (!ac.zero)
+	   assert(val!=0 );
+        
+        assert(I>=0 && I< M);
+        assert(J >=0 && J< N);
         vertex_data & vdata = _g->vertex_data(I);
-        vdata.datapoint.add_elem(J, val);   
+        set_new(vdata.datapoint,J, val);   
+
+        if (ps.algorithm == SVD_EXPERIMENTAL){
+          vertex_data & other = _g->vertex_data(J + ps.M);
+          set_new(other.datapoint, I, val);
+	  other.reported = true;
+        }
 	if (ac.algorithm == K_MEANS){ //compute mean for each cluster by summing assigned points
            ps.clusts.cluster_vec[vdata.current_cluster].cur_sum_of_points[J] += val;  
         }
@@ -109,10 +206,15 @@ void load_matrix_market(const char * filename, graph_type *_g)
 	        ps.clusts.cluster_vec[vdata.current_cluster].num_assigned_points++;
               ps.total_assigned++;//count the total number of non-zero rows we encountered
         }
-    }
+        if (i % step == 0)
+          logstream(LOG_INFO) << "Matrix market read " << i << " edges" << std::endl;
+     }
     ps.L = nz;
     fclose(f);
 
+
+    if (ac.reduce_mem_consumption)
+      compact(_g);
 }
 
 void save_matrix_market_format(const char * filename)
@@ -130,9 +232,10 @@ void save_matrix_market_format(const char * filename)
     mm_write_banner(f, matcode); 
     mm_write_mtx_crd_size(f, ps.K, ps.N, ps.K*ps.N);
 
-    for (i=0; i<ps.K; i++)
-       for (j=0; j<ps.N; j++)
-        fprintf(f, "%d %d %10.3g\n", i+1, j+1, ps.output_clusters.get(i,j));
+    for (i=0; i<ps.output_clusters.rows(); i++)
+       for (j=0; j<ps.output_clusters.cols(); j++)
+          if (get_val(ps.output_clusters,i,j) != 0)
+             fprintf(f, "%d %d %10.3g\n", i+1, j+1, get_val(ps.output_clusters,i,j));
 
     fclose(f);
     f = fopen((std::string(filename) + ".assignments.mtx").c_str(),"w");
@@ -145,8 +248,8 @@ void save_matrix_market_format(const char * filename)
 
     for (i=0; i< rows; i++)
     for (j=0; j< cols; j++)
-        if (ps.output_assignements.get(i,j) > 0)
-          fprintf(f, "%d %d %10.3g\n", i+1, j+1, ps.output_assignements.get(i,j));
+        if (get_val(ps.output_assignements,i,j) != 0)
+          fprintf(f, "%d %d %10.3g\n", i+1, j+1, get_val(ps.output_assignements,i,j));
 
     fclose(f);
 

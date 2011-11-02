@@ -1,8 +1,11 @@
 ## Compiler Switches must come before anything else
 # Force the use of gcc-4.2 as the default compiler on macs
 if(APPLE)
-  set(CMAKE_C_COMPILER "gcc-4.2")	
-  set(CMAKE_CXX_COMPILER "c++-4.2")
+  if (HAS_EIGEN)
+  else(HAS_EIGEN)
+    set(CMAKE_C_COMPILER "gcc-4.2")	
+    set(CMAKE_CXX_COMPILER "c++-4.2")
+  endif(HAS_EIGEN)
 endif(APPLE)
 
 
@@ -76,7 +79,7 @@ endif()
 # Use the Boost libraries
 set(Boost_USE_STATIC_LIBS TRUE)
 find_package(Boost 1.39 COMPONENTS 
-  program_options; filesystem; system REQUIRED)
+  program_options; filesystem; system; iostreams REQUIRED)
 
 set(Boost_SHARED_LIBRARIES "")
 # Stupid hack because Cmake cannot seperate the shared from the static versions
@@ -108,7 +111,11 @@ message(STATUS "Boost Shared libs: " ${Boost_SHARED_LIBRARIES})
 # ENDIF(CUDA_FOUND)
 
 
-
+if (HAS_EIGEN)
+  message(STATUS "Found Eigen linear algebra package")
+else ()
+  message(STATUS "Eigen linear algebra package not found")
+endif()
 
 
 
@@ -127,18 +134,24 @@ endif( )
 
 
 
-# EXPERIMENTAL (distributed) Capabilities
-find_package(MPICH2)
-
-if(MPI_FOUND)
-  message(STATUS "MPI Found: " ${MPI_LIBRARY} ${MPI_EXTRA_LIBRARY})
-  add_definitions(-DHASMPI)
-else(MPI_FOUND)
-  message(STATUS "MPI Not Found! Distributed Executables will not be compiled")
-endif(MPI_FOUND)
 
 
 if(EXPERIMENTAL)
+
+
+  # EXPERIMENTAL (distributed) Capabilities
+  find_package(MPICH2)
+  
+  if(MPI_FOUND)
+    message(STATUS "MPI Found: " ${MPI_LIBRARY} ${MPI_EXTRA_LIBRARY})
+    add_definitions(-DHASMPI)
+  else(MPI_FOUND)
+    message(STATUS "MPI Not Found! Distributed Executables will not be compiled")
+  endif(MPI_FOUND)
+
+
+
+
   #Find zoltan library
   set(ZOLTAN_ROOT "/usr/local/glzoltan" CACHE STRING 
     "The path to zoltan/include and zoltan/lib")
@@ -235,8 +248,8 @@ endif()
 if (DEFINED ITPP_INCLUDE_DIR)
   include_directories(${ITPP_INCLUDE_DIR})
   link_libraries(itpp)
-  link_libraries(lapack)
-  link_libraries(blas)
+  #link_libraries(lapack)
+  #link_libraries(blas)
   add_definitions(-DHAS_ITPP)
   message(STATUS "Manually setting itpp include dir: " ${ITPP_INCLUDE_DIR})
   set(ITPP-FOUND 1)
@@ -244,8 +257,8 @@ endif()
 
 if (DEFINED ITPP_LINK_DIR)
   link_directories(${ITPP_LINK_DIR})
-  link_libraries(lapack)
-  link_libraries(blas)
+  #link_libraries(lapack)
+  #link_libraries(blas)
   link_libraries(itpp)
   add_definitions(-DHAS_ITPP)
   message(STATUS "Manually setting itpp link dir: " ${ITPP_LINK_DIR})
@@ -578,9 +591,6 @@ ENDMACRO(add_jni_library)
 
 # ENDIF(MATLAB_FOUND)
 # ENDMACRO(add_mex_library)
-
-
-
 
 
 

@@ -51,7 +51,7 @@ namespace graphlab {
    engine. </li>
 
    <li> std::string engine_type: The type of engine to use.  Currently
-   we support {async, async_sim, synchronous}. </li>
+   we support {async,  synchronous}. </li>
 
    <li> std::string scope_type: The type of locking protocol (scope)
    to use. Currently we support {none, vertex, edge, full}. </li>
@@ -70,8 +70,7 @@ namespace graphlab {
   public:
     //! The number of cpus
     size_t ncpus;
-
-    //! The type of engine {async, async_sim, synchronous}
+    //! The type of engine {async,  synchronous}
     std::string engine_type;
 
     //! additional arguments to the engine

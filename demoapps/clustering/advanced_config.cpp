@@ -1,10 +1,11 @@
 #include "clustering.h"
-
+#include "distance.h"
 #include "../gabp/advanced_config.h"
 
 extern problem_setup ps;
 extern advanced_config ac;
 extern const char * inittypenames[];
+extern const char * distance_measure_name[];
 
 void advanced_config::init_command_line_options(graphlab::command_line_options & clopts){
 
@@ -27,14 +28,14 @@ void advanced_config::init_command_line_options(graphlab::command_line_options &
   clopts.attach_option("savefactors", &savefactors, savefactors, "save factors to file");  
   clopts.attach_option("loadfactors", &loadfactors, loadfactors, "load factors from file");  
   clopts.attach_option("stats", &stats, stats, "compute graph statistics");  
-  clopts.attach_option("binaryoutput", &binaryoutput, binaryoutput, "export U,V,T to a binary file"); 
+  clopts.attach_option("binaryoutput", &binaryoutput, binaryoutput, "export clusters and assignments into a binary file"); 
   clopts.attach_option("matrixmarket", &matrixmarket, matrixmarket, "give input in matrix market format"); 
  
   clopts.attach_option("scalerating", &scalerating, scalerating, "scale data by this factor");  
   clopts.attach_option("maxval", &maxval, maxval, "maximal allowed value in data");
   clopts.attach_option("minval", &minval, minval, "minimal allowed value in data");
   clopts.attach_option("unittest", &unittest, unittest, "unit testing. ");
-  clopts.attach_option("pmfformat", &supportgraphlabcf, supportgraphlabcf, "unit testing. ");
+  clopts.attach_option("pmfformat", &supportgraphlabcf, supportgraphlabcf, "input file of graphlab collaborative filtering library ");
   clopts.attach_option("float", &FLOAT, FLOAT, "data in float format (pmf data)"); 
   clopts.attach_option("printhighprecision", &printhighprecision, printhighprecision, "print RMSE output with high precision");
   clopts.attach_option("clusterdump", &clusterdump, clusterdump, "dump cluster locations into a text file");
@@ -42,12 +43,40 @@ void advanced_config::init_command_line_options(graphlab::command_line_options &
   clopts.attach_option("omp_support", &omp_support, omp_support, "OMP parallelization support");
   clopts.attach_option("lda_inner_em_iter", &em_max_inner_iter, em_max_inner_iter, "LDA inner EM max iterations");
   clopts.attach_option("threshold", &threshold, threshold, "Convergence threshold");
+  clopts.attach_option("distance_metric", &distance_measure, distance_measure, "distance metric");
+  clopts.attach_option("knn_sample_percent", &knn_sample_percent, knn_sample_percent, "knn sample percentage (0 -> 1)");
+  clopts.attach_option("reduce_mem_consumption", &reduce_mem_consumption, reduce_mem_consumption, "reduce memory consumption (potentially slower run)");
+  clopts.attach_option("svd_finalize", &svd_finalize, svd_finalize, "SVD: compute eigendecomposition at the last step");
+  clopts.attach_option("svd_compile_eigenvectors", &svd_compile_eigenvectors, svd_compile_eigenvectors, "SVD: compile eigen vectors from swap file");
+  clopts.attach_option("svd_compile_eigenvectors_block_size", &svd_compile_eigenvectors_block_size, svd_compile_eigenvectors_block_size, "SVD: compile eigen vectors rows blocking size");
 }
 
 void problem_setup::verify_setup(){
+
+   if (ac.datafile.size() == 0){
+      logstream(LOG_ERROR) << "Input file is not specified. Aborting run. " << std::endl;
+      exit(1);
+   }
+
    K = ac.K;
    algorithm = (runmodes)ac.algorithm;
    logstream(LOG_INFO) << "Setting cluster initialization mode to: " << inittypenames[ac.init_mode] << std::endl;
    ps.init_type = (initizliation_type)ac.init_mode;
    assert(K>0);
+
+   if (ac.algorithm == K_MEANS_FUZZY){
+      if (ps.init_type != INIT_RANDOM_CLUSTER){
+	 logstream(LOG_WARNING) << "With Fuzzy k-means, currently supported init method is init_random cluster" << std::endl;
+          ps.init_type = INIT_RANDOM_CLUSTER;
+      }
+   }
+  if (ac.knn_sample_percent != 1.0){
+     if (ps.algorithm != USER_KNN && ps.algorithm != ITEM_KNN){
+        logstream(LOG_WARNING) << "Knn sample percent has no effect" << std::endl;
+     }
+       
+  }
+  if (ac.distance_measure != EUCLIDEAN)
+    logstream(LOG_INFO) << "Setting distance metric to : " << distance_measure_name[ac.distance_measure] << std::endl;
+
 }

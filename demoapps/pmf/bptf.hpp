@@ -26,6 +26,7 @@
 
 #include "pmf.h"
 #include "../gabp/advanced_config.h"
+#include "io.hpp"
 
 //external global variables defined at pmf.cpp
 extern advanced_config ac;
@@ -34,12 +35,11 @@ extern problem_setup ps;
 /* variables for BPTF */
 double nuAlpha = 1;
 double Walpha = 1;
-double mu0 = 0;
-double mu0T = 1;
 double nu0 = ac.D;
 double alpha = 0;
 double beta = 1;
-double beta0 = 1; //TODO
+vec beta0 = init_vec("1", 1);
+vec mu0T = init_vec("1", 1);
 mat W0;
 mat W0T;
 double iWalpha;
@@ -48,14 +48,28 @@ mat iW0T;
 mat A_U, A_V, A_T;
 vec mu_U, mu_V, mu_T;
 
-using namespace itpp;
 using namespace graphlab;
 
-void export_kdd_format(graph_type * _g, testtype type, bool dosave);
+mat GenDiffMat(int K){
+    mat ret = zeros(K,K); 
+    for (int i=0; i<K; i++){
+        ret(i,i) = 2;
+    }
+    for (int i=1; i<K; i++){
+	ret(i-1,i) = -1;
+    }
+    for (int i=1; i<K; i++){
+	ret(i,i-1) = -1;
+    }
+   return ret;
+}
+
+
 /**
 * calc the A'A part of the least squares solution inv(A'A)*A'
 * for time nodes
 */
+template<typename graph_type>
 mat calc_MMT(int start_pos, int end_pos, vec &Umean){
 
   int batchSize = 1000;
@@ -70,7 +84,7 @@ mat calc_MMT(int start_pos, int end_pos, vec &Umean){
       cnt = 1;
     }
 
-    const vertex_data * data= &ps.g->vertex_data(i);
+    const vertex_data * data= &ps.g<graph_type>(TRAINING)->vertex_data(i);
      
     vec mean = data->pvec;
     Umean += mean;
@@ -95,6 +109,15 @@ mat calc_MMT(int start_pos, int end_pos, vec &Umean){
   assert(Umean.size() == ac.D);
   return MMT;
 }
+template<>
+mat calc_MMT<graph_type_svdpp>(int start_pos, int end_pos, vec &Umean){
+  assert(false);
+}
+template<>
+mat calc_MMT<graph_type>(int start_pos, int end_pos, vec &Umean){
+  assert(false);
+}
+
 
 
 void init_self_pot(){
@@ -112,9 +135,9 @@ void init_self_pot(){
   A_T = eye(ac.D); //cov prior for time nodes
 
   mu_U = zeros(ac.D); mu_V = zeros(ac.D); mu_T = zeros(ac.D);
-  printf("nuAlpha=%g, Walpha=%g, mu=%g, muT=%g, nu=%g, "
-         "beta=%g, W=%g, WT=%g bptf_burn_in=%d\n", nuAlpha, Walpha, mu0, 
-         mu0T, nu0, beta0, W0(1,1), W0T(1,1), ac.bptf_burn_in);
+  printf("nuAlpha=%g, Walpha=%g, mu0=%d, muT=%g, nu=%g, "
+         "beta=%g, W=%g, WT=%g bptf_burn_in=%d\n", nuAlpha, Walpha, 0, 
+         mu0T[0], nu0, beta0[0], W0(1,1), W0T(1,1), ac.bptf_burn_in);
 
 
   //test_randn(); 
@@ -139,10 +162,10 @@ void sample_alpha(double res2){
   if (nuAlpha > 0){
     double nuAlpha_ =nuAlpha+ ps.L;
     mat iWalpha_(1,1);
-    iWalpha_.set(0,0, iWalpha + res);
+    set_val(iWalpha_, 0,0,iWalpha + res);
     mat iiWalpha_ = zeros(1,1);
     iiWalpha_ = inv(iWalpha_);
-    alpha = wishrnd(iiWalpha_, nuAlpha_).get(0,0);
+    alpha = get_val(wishrnd(iiWalpha_, nuAlpha_),0,0);
     assert(alpha != 0);
 
     if (ac.debug)
@@ -155,21 +178,23 @@ void sample_alpha(double res2){
 
 // sample movie nodes hyperprior
 // according to equation A.3 in Xiong paper.
+template<typename graph_type>
 void sample_U(){
   assert(ps.BPTF);
 
-  vec Umean;
-  mat UUT = calc_MMT(0,ps.M,Umean);
+  vec Umean = zeros(ac.D);
+  mat UUT = calc_MMT<graph_type>(0,ps.M,Umean);
   
-  double beta0_ = beta0 + ps.M;
-  vec mu0_ = (beta0*mu0 + ps.M*Umean)/beta0_;
+  double beta0_ = beta0[0] + ps.M;
+  vec mu0_ = (ps.M*Umean)/beta0_;
   double nu0_ = nu0 +ps.M;
-  vec dMu = mu0 - Umean;
+  vec dMu = - Umean;
   if (ac.debug)
-    cout<<"dMu:"<<dMu<<"beta0: "<<beta0<<" beta0_ "<<beta0_<<" nu0_ " <<nu0_<<" mu0_ " << mu0_<<endl;
-  mat UmeanT = ps.M*(itpp::outer_product(Umean, Umean));
+    cout<<"dMu:"<<dMu<<"beta0: "<<beta0[0]<<" beta0_ "<<beta0_<<" nu0_ " <<nu0_<<" mu0_ " << mu0_<<endl;
+
+  mat UmeanT = ps.M*outer_product(Umean, Umean); //TODO: Umean * Umean.transpose();
   assert(UmeanT.rows() == ac.D && UmeanT.cols() == ac.D);
-  mat dMuT = (beta0*ps.M/beta0_)*(itpp::outer_product(dMu, dMu));
+  mat dMuT = (beta0[0]/beta0_)*UmeanT;
   mat iW0_ = iW0 + UUT - UmeanT + dMuT;
   mat W0_; 
   bool ret =inv(iW0_, W0_);
@@ -188,21 +213,22 @@ void sample_U(){
 
 // sample user nodes hyperprior
 // according to equation A.4 in Xiong paper
+template<typename graph_type>
 void sample_V(){
 
   assert(ps.BPTF);
-  vec Vmean;
-  mat VVT = calc_MMT(ps.M, ps.M+ps.N, Vmean);   
+  vec Vmean = zeros(ac.D);
+  mat VVT = calc_MMT<graph_type>(ps.M, ps.M+ps.N, Vmean);   
 
-  double beta0_ = beta0 + ps.N;
-  vec mu0_ = (beta0*mu0 + ps.N*Vmean)/beta0_;
+  double beta0_ = beta0[0] + ps.N;
+  vec mu0_ = (ps.N*Vmean)/beta0_;
   double nu0_ = nu0 +ps.N;
-  vec dMu = mu0 - Vmean;
+  vec dMu = - Vmean;
   if (ac.debug)
-    cout<<"dMu:"<<dMu<<"beta0: "<<beta0<<" beta0_ "<<beta0_<<" nu0_ " <<nu0_<<endl;
-  mat VmeanT = ps.N*(itpp::outer_product(Vmean, Vmean));
+    cout<<"dMu:"<<dMu<<"beta0: "<<beta0[0]<<" beta0_ "<<beta0_<<" nu0_ " <<nu0_<<endl;
+  mat VmeanT = ps.N*outer_product(Vmean, Vmean); //TODO Vmean * Vmean.transpose();
   assert(VmeanT.rows() == ac.D && VmeanT.cols() == ac.D);
-  mat dMuT =  (beta0*ps.N/beta0_)*itpp::outer_product(dMu, dMu);
+  mat dMuT =  (beta0[0]/beta0_)*VmeanT;
   mat iW0_ = iW0 + VVT - VmeanT + dMuT;
   mat W0_;
   bool ret = inv(iW0_, W0_);
@@ -228,12 +254,12 @@ mat calc_DT(){
 
   mat T = zeros(ac.D, ps.K);
   for (int i=0; i<ps.K; i++){
-    T.set_col(i,ps.times[i].pvec);
+    set_col(T,i,ps.times[i].pvec);
   }
   
   mat diff = zeros(ac.D,ps.K-1);
   for (int i=0; i<ps.K-1; i++){
-    diff.set_col(i , T.get_col(i) - T.get_col(i+1));
+    set_col(diff, i , get_col(T,i) - get_col(T,i+1));
   }
   if (ac.debug)
     cout<<"T:"<<T<<" diff: " << diff<<endl;
@@ -247,18 +273,18 @@ void sample_T(){
   assert(ps.BPTF);
   assert(ps.tensor);
 
-  double beta0_ = beta0 + 1;
+  double beta0_ = beta0[0] + 1;
   vec pvec = ps.times[0].pvec; 
-  vec mu0_ = (pvec + beta0*mu0T)/beta0_;
+  vec mu0_ = (pvec + beta0[0]*mu0T[0]*ps.vones)/beta0_;
   double nu0_ = nu0 +ps.K;
   //vec dMu = mu0 - Umean;
   if (ac.debug){
-    cout<<"beta0_ " << beta0_ << " beta0: " << beta0 << " nu0_ " << nu0_ << endl;
+    cout<<"beta0_ " << beta0_ << " beta0: " << beta0[0] << " nu0_ " << nu0_ << endl;
   } 
 
   mat dT = calc_DT();
-  vec dTe = pvec - mu0T;
-  mat iW0_ = iW0T + dT*transpose(dT) + (beta0/beta0_)*(itpp::outer_product(dTe,dTe));
+  vec dTe = pvec - mu0T[0]* ps.vones; // mu0T[0];
+  mat iW0_ = iW0T + dT*dT.transpose() + (beta0[0]/beta0_)*(outer_product(dTe, dTe)); //todo: dT*dT.transpose()
   
   mat W0_;
   bool ret =inv(iW0_, W0_);
@@ -275,24 +301,31 @@ void sample_T(){
    
 }
 
-/**
- * for BPTF: sample hyperprior and noise level at the end of each round
- */
-void last_iter_bptf(double res){
-    if (ps.iiter >= ac.bptf_burn_in){
-      printf("Finished burn-in period. starting to aggregate samples\n");
+template<typename graph_type>
+void sample_hyperpriors(double res){
     timer t;
     t.start();
-    if (ps.iiter > ac.bptf_delay_alpha)
+     if (ps.iiter > ac.bptf_delay_alpha)
     	sample_alpha(res);
-    sample_U();
-    sample_V();
+    sample_U<graph_type>();
+    sample_V<graph_type>();
     if (ps.tensor) 
       sample_T();
     ps.counter[BPTF_SAMPLE_STEP] += t.current_time();
-    if (ac.datafile == "kddcup" || ac.datafile == "kddcup2")
-	export_kdd_format(&ps.test_graph, TEST, false);
+}
+/**
+ * for BPTF: sample hyperprior and noise level at the end of each round
+ */
+template<typename graph_type, typename vertex_data, typename edge_data>
+void last_iter_bptf(double res){
+    if (ps.iiter == ac.bptf_burn_in){
+      printf("Finished burn-in period. starting to aggregate samples\n");
     }
+    sample_hyperpriors<graph_type>(res);
+    if (ac.datafile == "kddcup" || ac.datafile == "kddcup2")
+	export_kdd_format<graph_type, vertex_data, edge_data>(*ps.g<graph_type>(TEST), TEST, false);
+    if (ac.bptf_additional_output && ps.iiter >= ac.bptf_burn_in)
+      write_output<graph_type, vertex_data>();
 }
 
 

@@ -21,6 +21,8 @@
 *      its variants.  For example, use "%lf", "%lg", or "%le"
 *      when reading doubles, otherwise errors will occur.
 */
+#ifndef READ_MARTIRX_MARKET
+#define READ_MARTIRX_MARKET
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,10 +34,11 @@
 extern advanced_config ac;
 extern problem_setup ps;
 extern const char * testtypename[];
+FILE * open_file(const char * name, const char * mode);
 
+template<typename graph_type, typename vertex_data, typename edge_data>
 void load_matrix_market(const char * filename, graph_type *_g, testtype data_type)
 {
-#ifdef GL_NO_MULT_EDGES
     int ret_code;
     MM_typecode matcode;
     int M, N, nz;   
@@ -78,8 +81,9 @@ void load_matrix_market(const char * filename, graph_type *_g, testtype data_typ
     }
 
     ps.M = M; ps.N = N; ps.K = 1;
+    ps.last_node = M+N;
     verify_size(data_type, M, N, 1);
-    add_vertices(_g, data_type); 
+    add_vertices<graph_type, vertex_data>(_g, data_type); 
 
     /* reseve memory for matrices */
 
@@ -92,7 +96,6 @@ void load_matrix_market(const char * filename, graph_type *_g, testtype data_typ
 
 
     edge_data edge;
-    edge.time = 0;
     for (i=0; i<nz; i++)
     {
         fscanf(f, "%d %d %lg\n", &I, &J, &val);
@@ -106,19 +109,27 @@ void load_matrix_market(const char * filename, graph_type *_g, testtype data_typ
         _g->add_edge(I,J+ps.M,edge);
     }
     set_num_edges(nz, data_type);
-    verify_edges(_g, data_type);
+    verify_edges<graph_type,edge_data>(_g, data_type);
+ 
+    //add implicit edges if requested
+    if (data_type == TRAINING && ac.implicitratingtype != "none")
+       add_implicit_edges<graph_type, edge_data>(_g);
 
-    count_all_edges(ps.g);
+ 
+    if (data_type == TRAINING || (ac.aggregatevalidation && data_type == VALIDATION)){
+      count_all_edges<graph_type>(_g);
+    }
 
     fclose(f);
-#else
-   logstream(LOG_ERROR) << "loading matrix market format is not supported with multiple edges between user and movie mode. Uncomment the flag GL_NO_MULT_EDGES and recompile" << std::endl;
-#endif
 
 }
-
-void save_matrix_market_format(const char * filename, mat U, mat V)
+template<>
+ void load_matrix_market<graph_type_mult_edge, vertex_data, multiple_edges>(const char * filename, graph_type_mult_edge *_g, testtype data_type)
 {
+  assert(false);
+}
+
+void save_matrix_market_matrix(const char * filename, const mat & a){
     MM_typecode matcode;                        
     int i,j;
 
@@ -127,26 +138,59 @@ void save_matrix_market_format(const char * filename, mat U, mat V)
     mm_set_coordinate(&matcode);
     mm_set_real(&matcode);
 
-    FILE * f = fopen((std::string(filename) + ".U").c_str(),"w");
+    FILE * f = open_file(filename,"w");
     assert(f != NULL);
     mm_write_banner(f, matcode); 
-    mm_write_mtx_crd_size(f, ps.M, ac.D, ps.M*ac.D);
+    mm_write_mtx_crd_size(f, a.rows(), a.cols(), a.size());
 
-    for (i=0; i<ps.M; i++)
-       for (j=0; j<ac.D; j++)
-        fprintf(f, "%d %d %10.3g\n", i+1, j+1, U.get(i,j));
-
-    fclose(f);
-    f = fopen((std::string(filename) + ".V").c_str(),"w");
-    assert(f != NULL);
-    mm_write_banner(f, matcode); 
-    mm_write_mtx_crd_size(f, ps.N, ac.D, ps.N*ac.D);
-
-    for (i=0; i<ps.N; i++)
-       for (j=0; j<ac.D; j++)
-        fprintf(f, "%d %d %10.3g\n", i+1, j+1, V.get(i,j));
-
-    fclose(f);
+    for (i=0; i<a.rows(); i++)
+       for (j=0; j<a.cols(); j++)
+          if (get_val(a,i,j) != 0)
+               fprintf(f, "%d %d %10.3g\n", i+1, j+1, get_val(a,i,j));
+    
+    logstream(LOG_INFO) << "Saved output vector to file: " << filename << std::endl;
 
 }
 
+void save_matrix_market_vector(const char * filename, const vec & a){
+    MM_typecode matcode;                        
+    int i;
+
+    mm_initialize_typecode(&matcode);
+    mm_set_matrix(&matcode);
+    mm_set_coordinate(&matcode);
+    mm_set_real(&matcode);
+
+    FILE * f = open_file(filename,"w");
+    assert(f != NULL);
+    mm_write_banner(f, matcode); 
+    mm_write_mtx_crd_size(f, a.size(), 1, a.size());
+
+    for (i=0; i<a.size(); i++)
+          if (a[i] > 0)
+               fprintf(f, "%d %d %10.3g\n", i+1, 1, a[i]);
+
+    logstream(LOG_INFO) << "Saved output matrix to file: " << filename << std::endl;
+}
+
+
+
+void save_matrix_market_format(const char * filename, mat &U, mat& V)
+{
+    if (ps.algorithm != SVD){
+      save_matrix_market_matrix((std::string(filename) + ".V").c_str(),V);
+      save_matrix_market_matrix((std::string(filename) + ".U").c_str(),U);
+    }
+    else {
+      save_matrix_market_matrix((std::string(filename) + ".V").c_str(),U); /* for conforming to wikipedia convention, I swap U and V*/
+      save_matrix_market_matrix((std::string(filename) + ".U").c_str(),V);
+      save_matrix_market_vector((std::string(filename) + ".EigenValues_AAT").c_str(),get_col(ps.T,0));
+      save_matrix_market_vector((std::string(filename) + ".EigenValues_ATA").c_str(),get_col(ps.T,1));
+    }
+
+    if (ps.algorithm == SVD_PLUS_PLUS){
+      save_matrix_market_vector((std::string(filename) + ".UserBias").c_str(),ps.svdpp_usr_bias);
+      save_matrix_market_vector((std::string(filename) + ".MovieBias").c_str(),ps.svdpp_movie_bias);
+    }
+}
+#endif //READ_MARTIRX_MARKET

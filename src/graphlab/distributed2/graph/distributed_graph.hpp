@@ -53,6 +53,9 @@
 #include <graphlab/metrics/metrics.hpp>
 #include <graphlab/graph/atom_index_file.hpp>
 #include <graphlab/graph/disk_atom.hpp>
+#include <graphlab/graph/memory_atom.hpp>
+#include <graphlab/graph/graph_atom.hpp>
+#include <graphlab/graph/disk_graph.hpp>
 #include <graphlab/distributed2/graph/dgraph_edge_list.hpp>
 #include <graphlab/distributed2/graph/graph_local_store.hpp>
 #include <graphlab/logger/assertions.hpp>
@@ -148,18 +151,13 @@ namespace graphlab {
     typedef EdgeData edge_data_type;
 
 
-    typedef dist_graph_impl::graph_local_store<VertexData, EdgeData>
-    graph_local_store_type;
+    typedef dist_graph_impl::graph_local_store<VertexData, EdgeData> graph_local_store_type;
     
-    typedef typename graph_local_store_type::vertex_id_type 
-    vertex_id_type;
-    typedef typename graph_local_store_type::vertex_color_type
-    vertex_color_type;
+    typedef typename graph_local_store_type::vertex_id_type vertex_id_type;
+    typedef typename graph_local_store_type::vertex_color_type vertex_color_type;
     
-    typedef typename graph_local_store_type::edge_id_type   
-    edge_id_type;
-    typedef typename graph_local_store_type::edge_list_type 
-    local_edge_list_type;
+    typedef typename graph_local_store_type::edge_id_type edge_id_type;
+    typedef typename graph_local_store_type::edge_list_type local_edge_list_type;
 
   
 
@@ -168,12 +166,9 @@ namespace graphlab {
     class edge_list {
     public:
 
-      typedef typename boost::function<edge_id_type (edge_id_type)> 
-      TransformType;
-      typedef typename boost::transform_iterator<TransformType, const edge_id_type*> 
-      iterator;
-      typedef typename boost::transform_iterator<TransformType, const edge_id_type*> 
-      const_iterator;
+      typedef typename boost::function<edge_id_type (edge_id_type)> TransformType;
+      typedef typename boost::transform_iterator<TransformType, const edge_id_type*> iterator;
+      typedef typename boost::transform_iterator<TransformType, const edge_id_type*> const_iterator;
       typedef edge_id_type value_type;
     private:
       
@@ -259,8 +254,8 @@ namespace graphlab {
     distributed_graph(distributed_control &dc, 
                       std::string indexfilename, 
                       bool do_not_load_data = false,
-                      bool do_not_mmap = true,
-                      bool sliced_partitioning = false):
+                      bool sliced_partitioning = false,
+                      disk_graph_atom_type::atom_type atomtype = disk_graph_atom_type::MEMORY_ATOM):
       rmi(dc, this),
       indexfilename(indexfilename),
       globalvid2owner(dc, 65536),
@@ -268,11 +263,7 @@ namespace graphlab {
       pending_push_updates(true, 0),
       graph_metrics("distributed_graph"){
 
-      if (do_not_mmap == false) {
-        logstream(LOG_WARNING) << "Using MMAP for local storage is highly experimental" << std::endl;
-      }
                                 
-      cur_proc_vector.push_back(rmi.procid());
       // read the atom index.
       atom_index_file atomindex;
       atomindex.read_from_file(indexfilename);
@@ -299,7 +290,16 @@ namespace graphlab {
       }
       dc.barrier();
       rmi.broadcast(atompartitions, dc.procid() == 0);
-      construct_local_fragment(atomindex, atompartitions, rmi.procid(), do_not_load_data, do_not_mmap);
+      if (atomtype == disk_graph_atom_type::MEMORY_ATOM || 
+          atomtype == disk_graph_atom_type::DISK_ATOM) {
+        construct_local_fragment(atomindex, atompartitions, rmi.procid(), do_not_load_data, atomtype);
+      }
+      else if(atomtype == disk_graph_atom_type::WRITE_ONLY_ATOM) {
+        construct_local_fragment_playback(atomindex, atompartitions, rmi.procid(), do_not_load_data);
+      }
+      else {
+        ASSERT_MSG(false, "Distributed Graph Invalid Atom Type");
+      }
       rmi.barrier();
     }
 
@@ -402,10 +402,8 @@ namespace graphlab {
     find(vertex_id_type source, vertex_id_type target) const {
       std::pair<bool, edge_id_type> ret;
       // hmm. surprisingly tricky
-      typename global2localvid_type::const_iterator itersource = 
-        global2localvid.find(source);
-      typename global2localvid_type::const_iterator itertarget = 
-        global2localvid.find(target);
+      typename global2localvid_type::const_iterator itersource = global2localvid.find(source);
+      typename global2localvid_type::const_iterator itertarget = global2localvid.find(target);
       // both are local, I can find it
       if (itersource != global2localvid.end() && 
           itertarget != global2localvid.end()) {
@@ -626,9 +624,20 @@ namespace graphlab {
       return localvid2owner[iter->second] != rmi.procid();
     }
   
+    uint16_t globalvid_to_source_atom(vertex_id_type globalvid) const {
+      return localvid2atom[globalvid_to_localvid(globalvid)];
+    }
+
+    uint16_t localvid_to_source_atom(vertex_id_type localvid) const {
+      return localvid2atom[localvid];
+    }
   
     bool localvid_is_ghost(vertex_id_type localvid) const {
       return localvid2owner[localvid] != rmi.procid();
+    }
+
+    procid_t localvid_to_owner(vertex_id_type localvid) const {
+      return localvid2owner[localvid];
     }
 
     bool is_owned(vertex_id_type vid) const{
@@ -658,17 +667,12 @@ namespace graphlab {
     /** returns a vector of all processors having a replica of this globalvid
      *  This vector is guaranteed to be in sorted order of processors.
      */
-    const std::vector<procid_t>& localvid_to_replicas(vertex_id_type localvid) const {
-      if (localvid2ghostedprocs[localvid].empty()) {
-        return cur_proc_vector;
-      }
-      else {
-        return localvid2ghostedprocs[localvid];
-      }
+    const fixed_dense_bitset<MAX_N_PROCS>& localvid_to_replicas(vertex_id_type localvid) const {
+      return localvid2ghostedprocs[localvid];
     }
   
     /// returns a vector of all processors having a replica of this globalvid
-    const std::vector<procid_t>& globalvid_to_replicas(vertex_id_type globalvid) const {
+    const fixed_dense_bitset<MAX_N_PROCS>& globalvid_to_replicas(vertex_id_type globalvid) const {
       vertex_id_type localvid = globalvid_to_localvid(globalvid);
       return localvid_to_replicas(localvid);
     }
@@ -733,9 +737,7 @@ namespace graphlab {
       if (localvid2owner[localvid] == rmi.procid()) {
         localstore.increment_vertex_version(localvid);
       }
-      else {    
-        localstore.set_vertex_modified(localvid, true);
-      }
+      localstore.set_vertex_modified(localvid, true);
     }
 
     void edge_is_modified(edge_id_type eid) {
@@ -744,9 +746,7 @@ namespace graphlab {
       if (localvid2owner[localtargetvid] == rmi.procid()) {
         localstore.increment_edge_version(eid);
       }
-      else {    
-        localstore.set_edge_modified(eid, true);
-      }
+      localstore.set_edge_modified(eid, true);
     }
 
     void __attribute__((__deprecated__)) vertex_clear_modified(vertex_id_type vid) {
@@ -1018,13 +1018,59 @@ namespace graphlab {
       }
     }
 
+    
+    void color_graph() {
+      localstore.set_all_color_to_invalid();
+      rmi.barrier();
+      
+      for (procid_t i = 0;i < rmi.procid(); ++i) {
+        std::vector<std::pair<vertex_id_type, vertex_color_type> > received_assgs;
+        rmi.recv_from(i, received_assgs);
+        for (size_t i = 0;i < received_assgs.size(); ++i) {
+          localstore.color(globalvid_to_localvid(received_assgs[i].first)) = received_assgs[i].second;
+        }
+      }
+      
+      logger(LOG_INFO, "Coloring Graph.");
+      localstore.compute_coloring(false);
+      // broadcast ghost colors
+      std::vector<std::vector<std::pair<vertex_id_type, vertex_color_type> > > vcolors(rmi.numprocs());
+      
+      for (vertex_id_type i = 0;i < localstore.num_vertices(); ++i) {
+        const fixed_dense_bitset<MAX_N_PROCS>& replicas = localvid_to_replicas(i);
+        uint32_t j = 0;
+        if (replicas.first_bit(j)) {
+          do {
+            if (j > rmi.procid()) {
+              vcolors[j].push_back(std::make_pair(localvid_to_globalvid(i), 
+                                                  localstore.color(i)));
+            }
+            else if (j < rmi.procid()) {
+              // If there a replica that has a lower ID, it must have already been sent 
+              // (i.e. the color was computed already by someone else)
+              break;
+            }
+          } while(replicas.next_bit(j));
+        }
+      }
+      for (procid_t i = rmi.procid() + 1 ;i < rmi.numprocs(); ++i) {
+        rmi.send_to(i, vcolors[i]);
+      }      
+      rmi.barrier();
+      size_t nc = recompute_num_colors();
+      if (rmi.procid() == 0) {
+        logstream(LOG_INFO) << "Num Colors = " << nc << std::endl;
+      }
+      
+    }
+
 
     /** 
      * Get (and cache) the number of colors
      */
     size_t recompute_num_colors() {
       vertex_color_type max_color(0);
-      for(size_t i = 0; i < localstore.num_vertices(); ++i) {
+      for(size_t i = 0; i < local_vertices(); ++i) {
         max_color = std::max(max_color, localstore.color(i));
       }
       std::vector<vertex_color_type> proc2colors(rmi.numprocs());
@@ -1193,6 +1239,15 @@ namespace graphlab {
       return final_ret;
     }
   
+  
+    graph_local_store_type& get_local_store() { 
+      return localstore;
+    }
+
+    const graph_local_store_type& get_local_store() const { 
+      return localstore;
+    }
+ 
     // synchronzation calls. These are called from the ghost side
     // to synchronize against the owner.
   
@@ -1216,6 +1271,8 @@ namespace graphlab {
      * with their owners.
      */
     void synchronize_scope(vertex_id_type vid, bool async = false);   
+    
+    void synchronize_dirty_scope(vertex_id_type vid, bool async = false);   
   
     void allocate_scope_callbacks() {
       scope_callbacks.resize(local2globalvid.size());
@@ -1231,6 +1288,7 @@ namespace graphlab {
        vid must be on the boundary of the fragment. An assertion will be thrown otherwise.
     */
     void async_synchronize_scope_callback(vertex_id_type vid, 
+                                          bool dirtyonly,
                                           boost::function<void (void)>);
 
     /**
@@ -1252,7 +1310,15 @@ namespace graphlab {
     */
     void synchronize_all_scopes(bool async = false);
 
+    
+    std::string external_push_ghost_scope_to_owner(vertex_id_type vid, uint64_t bloom_filter_selector_gvid);
+    uint64_t get_owned_scope_dirty_bloom_filter(vertex_id_type vid);
+    void receive_external_update(const std::string &s);
   
+    
+    void push_modified_ghosts_in_scope_to_owner(vertex_id_type vid);
+    
+    
     /** Called from the owner side to synchronize the owner against ghosts. 
      * Pushes an owned vertex to all ghosts.
      */
@@ -1330,8 +1396,7 @@ namespace graphlab {
     };
 
     typedef std::pair<block_synchronize_request2, 
-                      typename std::vector<vertex_id_type>::iterator>
-    request_veciter_pair_type;
+                      size_t> request_veciter_pair_type;
 
 
     /// RMI object
@@ -1352,8 +1417,7 @@ namespace graphlab {
     graph_local_store_type localstore;
 
 
-    typedef boost::unordered_map<vertex_id_type, vertex_id_type> 
-    global2localvid_type;
+    typedef boost::unordered_map<vertex_id_type, vertex_id_type> global2localvid_type;
 
     /** all the mappings requried to move from global to local vid/eids
      *  We only store mappings if the vid/eid is in the local fragment
@@ -1372,8 +1436,7 @@ namespace graphlab {
     boost::unordered_set<vertex_id_type> boundaryscopesset;
     std::vector<vertex_id_type> boundaryscopes;
   
-    std::vector<std::vector<procid_t> > localvid2ghostedprocs;
-    std::vector<procid_t> cur_proc_vector;  // vector containing only 1 element. the current proc
+    std::vector<fixed_dense_bitset<MAX_N_PROCS> > localvid2ghostedprocs;
   
     /** To avoid requiring O(V) storage on each maching, the 
      * global_vid -> owner mapping cannot be stored in its entirely locally
@@ -1385,11 +1448,11 @@ namespace graphlab {
      * to its owner. Since this operation is quite frequently needed.
      */
     std::vector<procid_t> localvid2owner;
+    
+    std::vector<uint16_t> localvid2atom;
   
     /**
      * The number of vertices and edges in the entire graph so far.
-     * Currently only consistent on machine 0 since machine 0 manages 
-     * the allocation of global VIDs and local VIDs.
      */
     size_t numglobalverts, numglobaledges, numcolors;
 
@@ -1414,7 +1477,52 @@ namespace graphlab {
     }
   
 
+  /** From the atoms listed in the atom index file, construct the local store
+  * using all the atoms in the current partition. Uses the dump files.
+  * This is possibly the most memory efficient loading method, requiring very
+  * little excess memory.
+  */
+    void construct_local_fragment_playback(const atom_index_file &atomindex,
+                                  std::vector<std::vector<size_t> > partitiontoatom,
+                                  size_t curpartition,
+                                  bool do_not_load_data);
   
+    /**
+      Internal utility function used by \ref construct_local_fragment_playback
+      Creates a vertex with globalvid 'globalvid' and belonging machine 'machine'.
+      If the vertex does not exist, the vertex will be created with vertex data vdata.
+      If the vertex already exists, and overwritedata = false, nothing will be done.
+      If the vertex already exists and overwritedata = true, the vertex data will be overwritten
+      with vdata.
+      
+      Returns the new localvid
+    */
+    vertex_id_type incremental_loader_add_vertex(vertex_id_type globalvid,
+                                                  procid_t machine,
+                                                  uint16_t sourceatom,
+                                                  bool overwritedata = false,
+                                                  const VertexData &vdata = VertexData());
+
+    /**
+    * Playback a limited dump file to the localstore, updating the
+    * global/local VID mappings along the way.
+    * Currently only supports a restricted set of playback commands
+    * as generated by the mr_disk_graph_constructor
+    */
+    void playback_dump(std::string filename,
+                        size_t atomid,
+                        std::vector<procid_t> atom2machine,
+                        procid_t mymachine,
+                        bool do_not_load_data,
+                        std::vector<simple_spinlock>& edgelockset,
+                        atomic<edge_id_type> &edgecount);
+    
+    /**
+    * rearranges the local vertex IDs such that all owned vertices are
+    * at the start of the range
+    */    
+    void shuffle_local_vertices_to_start();
+    
     /**
      * From the atoms listed in the atom index file, construct the local store
      * using all the atoms in the current partition.
@@ -1423,7 +1531,7 @@ namespace graphlab {
                                   std::vector<std::vector<size_t> > partitiontoatom,
                                   size_t curpartition,
                                   bool do_not_load_data,
-                                  bool do_not_mmap) {
+                                  disk_graph_atom_type::atom_type atomtype) {
       timer loadtimer;
       loadtimer.start();
       // first make a map mapping atoms to machines
@@ -1440,7 +1548,7 @@ namespace graphlab {
     
     
       // the atomfiles for the local fragment
-      std::vector<disk_atom*> atomfiles;
+      std::vector<graph_atom*> atomfiles;
       // for convenience take a reference to the list of atoms in this partition
       std::vector<size_t>& atoms_in_curpart = partitiontoatom[curpartition];
       dense_bitset atoms_in_curpart_set(atomindex.atoms.size()); // make a set vertion for quick lookup
@@ -1454,9 +1562,19 @@ namespace graphlab {
       vertices_in_atom.resize(atoms_in_curpart.size());
       for (int i = 0;i < (int)(atoms_in_curpart.size()); ++i) {
         atoms_in_curpart_set.set_bit(atoms_in_curpart[i]);
-        atomfiles[i] = new disk_atom(atomindex.atoms[atoms_in_curpart[i]].file, 
-                                     atoms_in_curpart[i]);
-        atomfiles[i]->precache();
+        // check if the in memory version is available
+        std::string fname = atomindex.atoms[atoms_in_curpart[i]].file;
+        if (atomtype == disk_graph_atom_type::MEMORY_ATOM) {
+          atomfiles[i] = new memory_atom(fname + ".fast", 
+                                         atoms_in_curpart[i]);
+        }
+        else if(atomtype == disk_graph_atom_type::DISK_ATOM) {
+          atomfiles[i] = new disk_atom(fname, 
+                                       atoms_in_curpart[i]);
+        }
+        else {
+          ASSERT_MSG(false, "Invalid Atom Type for construct_local_fragment()");
+        }
         vertices_in_atom[i] = atomfiles[i]->enumerate_vertices();
       }
     
@@ -1511,7 +1629,12 @@ namespace graphlab {
       }
       global2localvid.rehash(2 * global2localvid.size());
 
-
+      localvid2atom.resize(local2globalvid.size());
+      for (size_t i = 0;i < vertices_in_atom.size(); ++i) {
+        for (size_t j = 0; j < vertices_in_atom[i].size(); ++j) {
+          localvid2atom[global2localvid[vertices_in_atom[i][j]]] = atoms_in_curpart[i];
+        }
+      }
 
 
       logger(LOG_INFO, "Counting Edges");
@@ -1522,7 +1645,7 @@ namespace graphlab {
       std::vector<size_t> acc_edges_created_in_this_atom(atomfiles.size(), 0);
 #pragma omp parallel for reduction(+ : nedges_to_create)
       for (int i = 0;i < (int)(atomfiles.size()); ++i) {
-        std::vector<vertex_id_type> vertices = vertices_in_atom[i];
+        std::vector<vertex_id_type>& vertices = vertices_in_atom[i];
         foreach(vertex_id_type dest, vertices) {
           uint16_t destowneratom;
           ASSERT_TRUE(atomfiles[i]->get_vertex(dest, destowneratom));
@@ -1559,11 +1682,8 @@ namespace graphlab {
       // open the local store
       logger(LOG_INFO, "Creating local store");
       // now lets construct the graph structure
-      localstore.create_store(local2globalvid.size(), nedges_to_create,
-                              "vdata." + tostr(curpartition),
-                              "edata." + tostr(curpartition),
-                              do_not_mmap);
-      localstore.zero_all();
+      localstore.create_store(local2globalvid.size(), nedges_to_create);
+
       // create a course grained lock for vertex IDs
       // edge insertions should not touch the same vertex at the same time
       std::vector<mutex> hashvlock;
@@ -1635,7 +1755,9 @@ namespace graphlab {
           uint16_t owneratom;
           ASSERT_TRUE(atomfiles[i]->get_vertex(globalvid, owneratom));
           localvid2owner[localvid] = atom2machine[owneratom];
-          localstore.color(localvid) = atomfiles[i]->get_color(globalvid);
+          if (owneratom == atomfiles[i]->atom_id()) {
+            localstore.color(localvid) = atomfiles[i]->get_color(globalvid);
+          }
           // if I own this vertex, set the global ownership to me
           if (localvid2owner[localvid] == rmi.procid()) {
             globalvid2owner.set(globalvid, rmi.procid());
@@ -1650,92 +1772,8 @@ namespace graphlab {
       logstream(LOG_INFO) << "vid -> Owner DHT set complete" << std::endl;
       logstream(LOG_INFO) << "Constructing auxiliary datastructures..." << std::endl;
 
-      // fill the ownedvertices list
-      // create thread local versions of ownedvertices, ghostvertices and boundaryscopeset
-    
-      std::vector<std::vector<vertex_id_type> > __ownedvertices__(omp_get_max_threads());
-      std::vector<std::vector<vertex_id_type> > __ghostvertices__(omp_get_max_threads());
-      std::vector<boost::unordered_set<vertex_id_type> > __boundaryscopesset__(omp_get_max_threads());
-      std::vector<dense_bitset> __ghostownerset__(omp_get_max_threads());
-    
-      for (size_t i = 0;i < __ghostownerset__.size(); ++i) {
-        __ghostownerset__[i].resize(rmi.numprocs());
-      }
-      spinlock ghostlock, boundarylock;
-      // construct the vid->replica mapping
-      // for efficiency reasons this only contains the maps for ghost vertices
-      // if the corresponding vector is empty, the only replica is the current machine
-      // use localvid_to_replicas() instead to access this since it provides 
-      // more consistent behavior (it checks. if the array is empty, it will return
-      // a vector containing only the current procid)
-    
-      localvid2ghostedprocs.resize(localvid2owner.size());
-    
-#pragma omp parallel for
-      for (long i = 0;i < (long)localvid2owner.size(); ++i) {
-        int thrnum = omp_get_thread_num();
-        if (localvid2owner[i] == rmi.procid()) {
-          __ownedvertices__[thrnum].push_back(local2globalvid[i]);
-          // loop through the neighbors and figure out who else might
-          // have a ghost of me. Fill the vertex2ghostedprocs vector
-          // those who have a ghost of me are the owners of my ghost vertices
-          __ghostownerset__[thrnum].clear();
-          __ghostownerset__[thrnum].set_bit_unsync(rmi.procid());  // must always have the current proc
-          foreach(edge_id_type ineid, localstore.in_edge_ids(i)) {
-            vertex_id_type localinvid = localstore.source(ineid);
-            if (localvid2owner[localinvid] != rmi.procid()) {
-              __ghostownerset__[thrnum].set_bit_unsync(localvid2owner[localinvid]);
-            }
-          }
-          foreach(edge_id_type outeid, localstore.out_edge_ids(i)) {
-            vertex_id_type localoutvid = localstore.target(outeid);
-            if (localvid2owner[localoutvid] != rmi.procid()) {
-              __ghostownerset__[thrnum].set_bit_unsync(localvid2owner[localoutvid]);
-            }
-          }
-          uint32_t b;
-          ASSERT_TRUE(__ghostownerset__[thrnum].first_bit(b));
-          do {
-            localvid2ghostedprocs[i].push_back(b);
-          } while(__ghostownerset__[thrnum].next_bit(b));
-        }
-        else {
-          __ghostvertices__[thrnum].push_back(local2globalvid[i]);
-          // if any of my neighbors are not ghosts, they are a boundary scope
-          foreach(edge_id_type ineid, localstore.in_edge_ids(i)) {
-            vertex_id_type localinvid = localstore.source(ineid);
-            if (localvid2owner[localinvid] == rmi.procid()) {
-              __boundaryscopesset__[thrnum].insert(local2globalvid[localinvid]);
-            }
-          }
-          foreach(edge_id_type outeid, localstore.out_edge_ids(i)) {
-            vertex_id_type localoutvid = localstore.target(outeid);
-            if (localvid2owner[localoutvid] == rmi.procid()) {
-              __boundaryscopesset__[thrnum].insert(local2globalvid[localoutvid]);
-            }
-          }
-        }
-      }
-    
-    
-      // join all the thread local datastructures
-      for (size_t i = 0;i < __ghostvertices__.size(); ++i) {
-        std::copy(__ownedvertices__[i].begin(), __ownedvertices__[i].end(), 
-                  std::back_inserter(ownedvertices));
-        std::copy(__ghostvertices__[i].begin(), __ghostvertices__[i].end(), 
-                  std::back_inserter(ghostvertices));
-        boundaryscopesset.insert(__boundaryscopesset__[i].begin(), __boundaryscopesset__[i].end());
-      }
-    
-      std::sort(ownedvertices.begin(), ownedvertices.end());
-      std::sort(ghostvertices.begin(), ghostvertices.end());
-      std::copy(boundaryscopesset.begin(), boundaryscopesset.end(),
-                std::back_inserter(boundaryscopes));
-      __ownedvertices__.clear();
-      __ghostvertices__.clear();
-      __boundaryscopesset__.clear();
-    
-    
+      construct_ghost_auxiliaries();
+      
       if (do_not_load_data == false) {
         logger(LOG_INFO, "Loading data");
         // done! structure constructed!  now for the data!  
@@ -1812,20 +1850,106 @@ namespace graphlab {
           ASSERT_EQ(localstore.edge_version(i), 1);
         }
       }
-      // flush the store
       logger(LOG_INFO, "Finalize");
       localstore.finalize();
-      logger(LOG_INFO, "Flush");
-      localstore.flush();
-      if (do_not_mmap == false) {
-        logger(LOG_INFO, "Prefetch computation"); 
-        localstore.compute_minimal_prefetch();
-      }
       logger(LOG_INFO, "Load complete.");
       rmi.comm_barrier();
       std::cout << "Load complete in " << loadtimer.current_time() << std::endl;
     }
 
+    /**
+     * Construct the ownedvertices, ghostvertices, boundaryscopes,
+     * localvid2ghostedprocs datastructures. Depends on completion of the
+     * localvid2owner, local2globalvid and the localstore.
+     */
+    void construct_ghost_auxiliaries() {
+
+      // fill the ownedvertices list
+      // create thread local versions of ownedvertices, ghostvertices and boundaryscopeset
+    
+      std::vector<std::vector<vertex_id_type> > __ownedvertices__(omp_get_max_threads());
+      std::vector<std::vector<vertex_id_type> > __ghostvertices__(omp_get_max_threads());
+      std::vector<boost::unordered_set<vertex_id_type> > __boundaryscopesset__(omp_get_max_threads());
+      std::vector<fixed_dense_bitset<MAX_N_PROCS> > __ghostownerset__(omp_get_max_threads());
+    
+      spinlock ghostlock, boundarylock;
+      // construct the vid->replica mapping
+      // for efficiency reasons this only contains the maps for ghost vertices
+      // if the corresponding vector is empty, the only replica is the current machine
+      // use localvid_to_replicas() instead to access this since it provides 
+      // more consistent behavior (it checks. if the array is empty, it will return
+      // a vector containing only the current procid)
+    
+      localvid2ghostedprocs.resize(localvid2owner.size());
+      for (size_t i = 0;i < localvid2ghostedprocs.size(); ++i) {
+        localvid2ghostedprocs[i].clear();
+        localvid2ghostedprocs[i].set_bit_unsync(rmi.procid());
+      }
+#pragma omp parallel for
+      for (long i = 0;i < (long)localvid2owner.size(); ++i) {
+        int thrnum = omp_get_thread_num();
+        if (localvid2owner[i] == rmi.procid()) {
+          __ownedvertices__[thrnum].push_back(local2globalvid[i]);
+          // loop through the neighbors and figure out who else might
+          // have a ghost of me. Fill the vertex2ghostedprocs vector
+          // those who have a ghost of me are the owners of my ghost vertices
+          __ghostownerset__[thrnum].clear();
+          __ghostownerset__[thrnum].set_bit_unsync(rmi.procid());  // must always have the current proc
+          foreach(edge_id_type ineid, localstore.in_edge_ids(i)) {
+            vertex_id_type localinvid = localstore.source(ineid);
+            if (localvid2owner[localinvid] != rmi.procid()) {
+              __ghostownerset__[thrnum].set_bit_unsync(localvid2owner[localinvid]);
+            }
+          }
+          foreach(edge_id_type outeid, localstore.out_edge_ids(i)) {
+            vertex_id_type localoutvid = localstore.target(outeid);
+            if (localvid2owner[localoutvid] != rmi.procid()) {
+              __ghostownerset__[thrnum].set_bit_unsync(localvid2owner[localoutvid]);
+            }
+          }
+          uint32_t b;
+          ASSERT_TRUE(__ghostownerset__[thrnum].first_bit(b));
+          localvid2ghostedprocs[i] = __ghostownerset__[thrnum];
+          localvid2ghostedprocs[i].set_bit_unsync(rmi.procid()); // make sure current bit is set
+        }
+        else {
+          __ghostvertices__[thrnum].push_back(local2globalvid[i]);
+          // if any of my neighbors are not ghosts, they are a boundary scope
+          foreach(edge_id_type ineid, localstore.in_edge_ids(i)) {
+            vertex_id_type localinvid = localstore.source(ineid);
+            if (localvid2owner[localinvid] == rmi.procid()) {
+              __boundaryscopesset__[thrnum].insert(local2globalvid[localinvid]);
+            }
+          }
+          foreach(edge_id_type outeid, localstore.out_edge_ids(i)) {
+            vertex_id_type localoutvid = localstore.target(outeid);
+            if (localvid2owner[localoutvid] == rmi.procid()) {
+              __boundaryscopesset__[thrnum].insert(local2globalvid[localoutvid]);
+            }
+          }
+        }
+      }
+    
+    
+      // join all the thread local datastructures
+      for (size_t i = 0;i < __ghostvertices__.size(); ++i) {
+        std::copy(__ownedvertices__[i].begin(), __ownedvertices__[i].end(), 
+                  std::back_inserter(ownedvertices));
+        std::copy(__ghostvertices__[i].begin(), __ghostvertices__[i].end(), 
+                  std::back_inserter(ghostvertices));
+        boundaryscopesset.insert(__boundaryscopesset__[i].begin(), __boundaryscopesset__[i].end());
+      }
+    
+      std::sort(ownedvertices.begin(), ownedvertices.end());
+      std::sort(ghostvertices.begin(), ghostvertices.end());
+      std::copy(boundaryscopesset.begin(), boundaryscopesset.end(),
+                std::back_inserter(boundaryscopes));
+      __ownedvertices__.clear();
+      __ghostvertices__.clear();
+      __boundaryscopesset__.clear();
+    }
+    
+    
     vertex_conditional_store get_vertex_if_version_less_than(vertex_id_type vid, 
                                                              uint64_t vertexversion,
                                                              vertex_conditional_store &vdata);
@@ -1876,16 +2000,24 @@ namespace graphlab {
       return std::make_pair(iter1->second, iter2->second);
     }
   
- 
     /**
        Constructs the request set for a scope synchronization
        the request type is a little strange , but it is for efficiency reasons.
        the second component of the pair can be ignored
     */
     void synchronize_scope_construct_req(vertex_id_type vid, 
-                                         std::map<procid_t, request_veciter_pair_type > &requests);   
+                                         std::map<procid_t, request_veciter_pair_type > &requests,
+                                         bool dirtyonly = false);   
  
+  
+    void update_owned_data(block_synchronize_request2 &request);
  
+    /**
+       Constructs the request set for a synchronization of edges
+    */  
+    void synchronize_all_edges_construct_req(std::map<procid_t, 
+                                    block_synchronize_request2> &requests);
+    
     void update_vertex_data_and_version(vertex_id_type vid,
                                         vertex_conditional_store &estore);
   
@@ -1923,8 +2055,6 @@ namespace graphlab {
                                                  edge_conditional_store &estore,
                                                  procid_t srcproc, size_t reply);
                           
-    friend class graph_lock<distributed_graph<VertexData, EdgeData> >;
- 
   
   
     /***********************************************************************
@@ -2037,6 +2167,7 @@ namespace graphlab {
 
   #define FROM_DISTRIBUTED_GRAPH_INCLUDE
   #include <graphlab/distributed2/graph/distributed_graph_impl.hpp>
+  #include <graphlab/distributed2/graph/distributed_graph_incremental_loader.hpp>
   #undef FROM_DISTRIBUTED_GRAPH_INCLUDE
 
 

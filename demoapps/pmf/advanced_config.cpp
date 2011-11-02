@@ -1,6 +1,5 @@
-#include "pmf.h"
+//#include "pmf.h"
 #include "../gabp/advanced_config.h"
-extern problem_setup ps;
 extern advanced_config ac;
 
 void advanced_config::init_command_line_options(graphlab::command_line_options & clopts){
@@ -29,6 +28,7 @@ void advanced_config::init_command_line_options(graphlab::command_line_options &
   clopts.attach_option("bptf_alpha", &bptf_alpha, bptf_alpha, "BPTF alpha (noise parameter)");  
   clopts.attach_option("bptf_burn_in", &bptf_burn_in, bptf_burn_in, "BPTF burn-in period");
   clopts.attach_option("bptf_delay_alpha", &bptf_delay_alpha, bptf_delay_alpha, "BPTF start sampling alpha (noise level) the bptf_delay_alpha round ");  
+  clopts.attach_option("bptf_additional_output", &bptf_additional_output, bptf_additional_output, "BPTF: export factor matrices on each iteration (and not just at the end)");  
   
   //ALS related switches
   clopts.attach_option("regnormal", &regnormal, regnormal, "ALS - use identical normalization for each variable? (default is weighted regularization by the number of edges");  
@@ -65,89 +65,11 @@ void advanced_config::init_command_line_options(graphlab::command_line_options &
   clopts.attach_option("lasso_max_iter", &lasso_max_iter, lasso_max_iter, "max iter for lasso sparsity (run modes 10-12)");
 
 
-}
-
-void problem_setup::verify_setup(){
-  switch(algorithm){
-  // iterative matrix factorization using alternating least squares
-  // or SVD ++
-  case ALS_MATRIX:
-  case ALS_SPARSE_USR_FACTOR:
-  case ALS_SPARSE_USR_MOVIE_FACTORS:
-  case ALS_SPARSE_MOVIE_FACTOR:
-  case WEIGHTED_ALS:
-  case SVD_PLUS_PLUS:
-  case STOCHASTIC_GRADIENT_DESCENT:
-  case LANCZOS:
-  case NMF:
-    tensor = false; BPTF = false;
-    break;
-
-    // MCMC tensor factorization
-  case BPTF_TENSOR:
-    // tensor factorization , allow for multiple edges between user and movie in different times
-  case BPTF_TENSOR_MULT:
-    tensor = true; BPTF = true;
-   break;
-    //MCMC matrix factorization
-  case BPTF_MATRIX:
-    tensor = false; BPTF = true;
-    break;
-   // tensor factorization
-  case ALS_TENSOR_MULT:
-    tensor = true; BPTF = false;
-    break;
-  default:
-    assert(0);
-  }
+  clopts.attach_option("shuffle", &shuffle, shuffle, "shuffle order of execution at random");
+  clopts.attach_option("max_iter", &iter,iter, "maximal number of iterations (when round robin is used, used --scheduler=\"round_robin(max_iterations=XX,block_size=1)\")  ");
+  clopts.attach_option("show_version", &show_version, show_version, "show linear algebra package version and exist");
+  clopts.attach_option("threshold", &threshold, threshold, "convergence threshold (experimental)");
+}  
 
 
-//INPUT SANITY CHECKS
-#ifdef GL_NO_MCMC
-  if (BPTF){
-    logstream(LOG_ERROR) << "Can not run MCMC method with GL_NO_MCMC flag. Please comment flag on pmf.h and recompile\n";
-    exit(1); 
- }
-#endif
 
-#ifdef GL_NO_MULT_EDGES
-  if (algorithm == ALS_TENSOR_MULT || algorithm == BPTF_TENSOR_MULT){
-    logstream(LOG_ERROR) << "Can not have support for multiple edges with GL_NO_MULT_EDGES flag. Please comment flag on pmf.h and recompile\n";
-   exit(1);
-  }
-#endif  
-#ifdef GL_SVD_PP
-  if (algorithm != SVD_PLUS_PLUS){
-    logstream(LOG_ERROR) << "Can not run required algorithm with GL_SVD_PP flag. Please comment flag on pmf.h and recompile\n";
-    exit(1);
-  }
-#else
-  if (algorithm == SVD_PLUS_PLUS){
-    logstream(LOG_ERROR) << "Can not run required algorithm without GL_SVD_PP flag. Please define flag on pmf.h and recompile\n";
-    exit(1);
-  }
-#endif
-
-#ifndef GL_NO_MULT_EDGES
-#ifdef GL_SVD_PP
-   logstream(LOG_ERROR) << "When working with SVD++ (GL_SVD_PP is defined in pmf.h) you should also define GL_NO_MULT_EDGES\n";
-   exit(1); 
-#endif
-#endif
-
-  if (ac.bptf_delay_alpha != 0 && (algorithm != BPTF_TENSOR_MULT && algorithm != BPTF_TENSOR))
-	logstream(LOG_WARNING) << "Delaying alpha (sampling of noise level) is ignored in non-MCMC methods" << std::endl;
-
-  if (ac.bptf_burn_in != 10 && (algorithm != BPTF_TENSOR_MULT && algorithm != BPTF_TENSOR && algorithm != BPTF_MATRIX))
-	logstream(LOG_WARNING) << "Markov chain burn in period is ignored in non-MCMC methods" << std::endl;
-
-  if (ac.user_sparsity < 0.5 || ac.user_sparsity >= 1){
-	logstream(LOG_ERROR) << "user_sparsity of factor matrix has to be in the range [0.5 1)" << std::endl;
-        exit(1);
-  }
-  if (ac.movie_sparsity < 0.5 || ac.movie_sparsity >= 1){
-	logstream(LOG_ERROR) << "movie_sparsity of factor matrix has to be in the range [0.5 1)" << std::endl;
-        exit(1);
-  }
-
-}

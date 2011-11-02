@@ -25,6 +25,7 @@
 #define __SGD_HPP
 
 #include "graphlab.hpp"
+#include "als.hpp"
 #include <graphlab/macros_def.hpp>
 
 
@@ -40,12 +41,21 @@ extern advanced_config ac;
 extern problem_setup ps;
 
 using namespace graphlab;
-using namespace itpp;
 
-void last_iter();
-double predict(const vertex_data& user, const vertex_data &movie, float rating, float & prediction);
+void sgd_update_function(gl_types_mcmc::iscope &scope, 
+			 gl_types_mcmc::icallback &scheduler) {
+   assert(false);
+} 
+void sgd_update_function(gl_types_mult_edge::iscope &scope, 
+			 gl_types_mult_edge::icallback &scheduler) {
+   assert(false);
+}
+void sgd_update_function(gl_types_svdpp::iscope &scope, 
+			 gl_types_svdpp::icallback &scheduler) {
+   assert(false);
+} 
 
-/***
+ /***
  * UPDATE FUNCTION
  */
 void sgd_update_function(gl_types::iscope &scope, 
@@ -82,31 +92,22 @@ void sgd_update_function(gl_types::iscope &scope,
    // for each rating
    //compute SGD Step 
    foreach(graphlab::edge_id_t oedgeid, outs) {
-#ifndef GL_NO_MULT_EDGES
-      multiple_edges & edges = scope.edge_data(oedgeid);
-      for (int j=0; j< (int)edges.medges.size(); j++){
-         edge_data & edge = edges.medges[j];
-#else
       edge_data & edge = scope.edge_data(oedgeid);
-#endif
       vertex_data  & movie = scope.neighbor_vertex_data(scope.target(oedgeid));
       float estScore;
       float sqErr = predict(user, movie, NULL, edge.weight, estScore);
       user.rmse += sqErr;
-      assert(!isnan(user.rmse));
+      assert(!std::isnan(user.rmse));
       float err = edge.weight - estScore;
       movie.pvec = movie.pvec + ac.sgd_gamma*(err*user.pvec - ac.sgd_lambda*movie.pvec);
       user.pvec = user.pvec + ac.sgd_gamma*(err*movie.pvec - ac.sgd_lambda*user.pvec);
-#ifndef GL_NO_MULT_EDGES
-      }
-#endif
    }
 
 
    ps.counter[EDGE_TRAVERSAL] += t.current_time();
 
    if (scope.vertex() == (uint)ps.M-1){
-  	last_iter();
+  	last_iter<gl_types::graph,vertex_data,edge_data>();
         ac.sgd_gamma *= ac.sgd_step_dec;
     }
 

@@ -67,6 +67,7 @@ add_library(graphlab STATIC
   util/timer.cpp
   util/generics/any.cpp
   graph/disk_atom.cpp
+  graph/write_only_disk_atom.cpp
   graph/atom_index_file.cpp
   logger/logger.cpp
   logger/assertions.cpp
@@ -93,6 +94,7 @@ add_library(graphlab STATIC
   rpc/dc_stream_receive.cpp
   rpc/dc_buffered_stream_send.cpp
   rpc/dc_buffered_stream_send_expqueue.cpp
+  rpc/dc_buffered_stream_send_multiqueue.cpp
   rpc/dc_buffered_stream_send_expqueue2.cpp
   rpc/dc_buffered_stream_receive.cpp
   rpc/dc.cpp

@@ -30,8 +30,8 @@
 extern advanced_config ac;
 extern problem_setup ps;
 
+template<typename graph_type, typename edge_data>
 void add_implicit_edges(graph_type * g){
-#ifdef GL_NO_MULT_EDGES
    assert(ac.implicitratingpercentage>= 0 && ac.implicitratingpercentage<=1);
    assert(ac.implicitratingtype != "none");
 
@@ -54,7 +54,7 @@ void add_implicit_edges(graph_type * g){
           assert(to >= 0 && to < ps.N);
           flag_edges[to]=true;
       }
-      float toadd;
+      float toadd = 0;
       if (ac.implicitratingtype == "uniform")
 	toadd  = ac.implicitratingpercentage*ps.N;
       else if (ac.implicitratingtype == "user")
@@ -62,11 +62,11 @@ void add_implicit_edges(graph_type * g){
       if (ac.implicitratingtype == "uniform" && i == 0 && toadd < 1){
          logstream(LOG_WARNING) << "implicitratingpercentage given is too low, resulting in " << toadd << " new edges per node. No edges will be added." << std::endl;
       }
-      ivec newedges = randi(toadd,0,ps.N-1);
+      ivec newedges = ::randi(toadd,0,ps.N-1);
       assert(newedges.size() <= ps.N);
       for (int j=0; j< newedges.size(); j++){
 	 if (!flag_edges[newedges[j]]){
-		ps.g->add_edge(i,ps.M+ newedges[j], data);
+		g->add_edge(i,ps.M+ newedges[j], data);
  		flag_edges[newedges[j]] = true;
 		added++;
          }
@@ -75,15 +75,15 @@ void add_implicit_edges(graph_type * g){
 
    ps.L+=added; //update edge count including added edges
    logstream(LOG_INFO) << "added " << added << " implicit edges, rating=" <<ac.implicitratingvalue << " weight=" << ac.implicitratingweight << " type=" << ac.implicitratingtype << std::endl;
-#else
-   logstream(LOG_ERROR) << "implicit edges addition is not supported in multiple edges between user and movie mode. Uncomment the flag GL_NO_MULT_EDGES in pmf.h and recompile" << std::endl;
-#endif
 }
 
 
 
 
-
+template<>
+void add_implicit_edges<graph_type_mult_edge, multiple_edges>(graph_type_mult_edge * g){
+   assert(false);
+} 
 
 
 

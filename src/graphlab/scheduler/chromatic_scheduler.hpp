@@ -92,17 +92,12 @@ namespace graphlab {
     //! The maximum number of iterations
     size_t max_iterations;
 
-   
-
     atomic<size_t> color;
     atomic<size_t> waiting;
 
     terminator_type term;
 
   public:
-
-    
-    
 
     chromatic_scheduler(const graph_type& graph, 
                         size_t ncpus,

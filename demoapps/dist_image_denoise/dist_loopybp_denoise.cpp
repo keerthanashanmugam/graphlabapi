@@ -26,7 +26,7 @@
  * belief propagation in a pairwise markov random field to denoise a
  * synthetic noisy image.
  *
- *  \author Joseph Gonzalez
+ *  \author Joseph Gonzalez, Yucheng Low
  */
 
 // INCLUDES ===================================================================>
@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
             << "the graphlab framework." << std::endl;
 
   // set the global logger
-  global_logger().set_log_level(LOG_WARNING);
+  global_logger().set_log_level(LOG_DEBUG);
   global_logger().set_log_to_console(true);
 
   bool makegraph = false;
@@ -259,13 +259,14 @@ int main(int argc, char** argv) {
     img.save(noisy_fn.c_str());
     
     std::cout << "Constructing pairwise Markov Random Field. " << std::endl;
-    gl_types::disk_graph dg("denoise", 32);
+    gl_types::disk_graph dg("denoise", 32, graphlab::disk_graph_atom_type::WRITE_ONLY_ATOM);
     gl_types::memory_graph g;
 
     construct_graph(img, colors, sigma, g);
     std::vector<graphlab::graph_partitioner::part_id_type> parts;
-    graphlab::graph_partitioner::metis_partition(g, 32, parts);
+    graphlab::graph_partitioner::random_partition(g, 32, parts);
     dg.create_from_graph(g, parts);
+    dg.make_memory_atoms();
     dg.finalize();
     return 0;
   }
@@ -273,11 +274,14 @@ int main(int argc, char** argv) {
   graphlab::mpi_tools::init(argc, argv);
   
   graphlab::dc_init_param param;
-  ASSERT_TRUE(graphlab::init_param_from_mpi(param));
+  param.initstring = param.initstring + ", buffered_multiqueue_send=1";
+  if(graphlab::init_param_from_env(param) == false) {
+    graphlab::init_param_from_mpi(param); 
+  }
   // create distributed control
   graphlab::distributed_control dc(param);
   // Create the distributed_graph --------------------------------------------------------->
-  gl_types::distributed_core core(dc, "denoise.idx");
+  gl_types::distributed_core core(dc, "denoise.idx", graphlab::disk_graph_atom_type::WRITE_ONLY_ATOM);
   // Set the engine options
   core.set_engine_options(clopts);
   core.build_engine();
@@ -327,7 +331,7 @@ int main(int argc, char** argv) {
 
 
     // Saving the output -------------------------------------------------------->
-    std::cout << "Rendering the cleaned image. " << std::endl;
+ /*   std::cout << "Rendering the cleaned image. " << std::endl;
     if(pred_type == "map") {
       for(size_t v = 0; v < core.graph().num_vertices(); ++v) {
         const vertex_data& vdata = core.graph().get_vertex_data(v);
@@ -345,7 +349,7 @@ int main(int argc, char** argv) {
     }
     std::cout << "Saving cleaned image. " << std::endl;
     img.save(pred_fn.c_str());
-
+*/
     std::cout << "Done!" << std::endl;
   }
   graphlab::mpi_tools::finalize();
