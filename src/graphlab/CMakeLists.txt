@@ -25,9 +25,6 @@ include(extern/metisextern.cmake)
 
 
 #build the graphlab library
-if(Sctp-FOUND)
-#  set(sctp_source rpc/dc_sctp_comm.cpp)
-endif()
 
 if (MPI_FOUND)
   set(util_mpi_tools util/mpi_tools.cpp)
@@ -67,13 +64,11 @@ add_library(graphlab STATIC
   factors/unary_factor.cpp
   ${util_mpi_tools}
   rpc/dc_tcp_comm.cpp
-#  ${sctp_source}
   rpc/circular_char_buffer.cpp
   rpc/dc_stream_receive.cpp
   rpc/dc_buffered_stream_send2.cpp
   rpc/dc.cpp
   rpc/reply_increment_counter.cpp
-  rpc/dc_comm_services.cpp
   rpc/dc_init_from_env.cpp
   rpc/dc_init_from_mpi.cpp
   rpc/async_consensus.cpp
