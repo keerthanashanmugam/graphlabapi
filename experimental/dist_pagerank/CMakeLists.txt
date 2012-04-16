@@ -15,5 +15,4 @@ add_distributed_graphlab_executable(dist_delta_pagerank dist_delta_pagerank.cpp)
 
 
 
-
 copy_files(*.job)

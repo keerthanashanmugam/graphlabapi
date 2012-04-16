@@ -189,6 +189,7 @@ public:
 }; // end of class ALS update
 
 
+graphlab::timer timer;
 
 
 class aggregator :
@@ -232,11 +233,14 @@ public:
 
   void finalize(iglobal_context_type& context) {
     std::cout 
+      << "results:\t" 
+      << timer.current_time() << '\t'
       << std::setw(10) << sqrt( rmse / nedges ) << '\t'
       << std::setw(10) << max_error << '\t'
       << std::setw(10) << max_residual << '\t'
       << std::setw(10) << max_updates << '\t'
       << std::setw(10) << min_updates << '\t'
+      << std::setw(10) << total_updates << '\t'
       << std::setw(10) << (double(total_updates) / context.num_vertices()) 
       << std::endl;
   }
@@ -312,7 +316,7 @@ int main(int argc, char** argv) {
 
 
   std::cout << dc.procid() << ": Loading graph." << std::endl;
-  graphlab::timer timer; timer.start();
+  timer.start();
   graph_type graph(dc, clopts);
   load_graph_dir(dc, graph, matrix_dir, dc.procid(), dc.numprocs());
   std::cout << dc.procid() << ": Finalizing graph." << std::endl;
