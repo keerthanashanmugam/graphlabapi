@@ -62,8 +62,7 @@ double ACCURACY = 1e-5;
  * The factorized page rank update function
  */
 class delta_pagerank : 
-  public graphlab::iupdate_functor<graph_type, delta_pagerank>,
-  public graphlab::IS_POD_TYPE {
+  public graphlab::iupdate_functor<graph_type, delta_pagerank> {
 private:
   float accum;
 public:
@@ -79,6 +78,13 @@ public:
     return (accum != 0)? graphlab::OUT_EDGES : graphlab::NO_EDGES;
   }
 
+  void save(graphlab::oarchive &oarc) const {
+    oarc << accum;
+  };
+  void load(graphlab::iarchive &iarc) {
+    iarc >> accum;
+  };
+  
   // Merge two delta_pagerank accumulators after running gather
   void init_gather(icontext_type& context) { }
   void merge(const delta_pagerank& other) { }
@@ -111,6 +117,8 @@ public:
 
 
 
+
+
 #if defined(SYNCHRONOUS_ENGINE)
 typedef graphlab::distributed_synchronous_engine<graph_type, delta_pagerank> engine_type;
 #else
@@ -126,19 +134,24 @@ class sum_residual_aggregator :
   public graphlab::iaggregator<graph_type, delta_pagerank, sum_residual_aggregator>,
   public graphlab::IS_POD_TYPE {
 private:
-  float count;
+  float error_norm;
+  float max_error_norm;
 public:
-  sum_residual_aggregator() : count(0) { }
+  sum_residual_aggregator() : error_norm(0),max_error_norm(0) { }
   void operator()(icontext_type& context) {
-    count += std::fabs(context.const_vertex_data().value - context.const_vertex_data().old_value);
+    float e = std::fabs(context.const_vertex_data().value - context.const_vertex_data().old_value);
+    error_norm += e;
+    max_error_norm = std::max(e, max_error_norm);
   } // end of operator()
   void operator+=(const sum_residual_aggregator& other) {
-    count += other.count;
+    error_norm += other.error_norm;
+    max_error_norm = std::max(other.max_error_norm, max_error_norm);
   }
   void finalize(iglobal_context_type& context) {
-    std::cout << "Sum Change:\t\t" << count << std::endl;
+    std::cout << "|old_x-new_x|_1 :\t" << error_norm << std::endl;
+    std::cout << "|old_x-new_x|_inf :\t" << max_error_norm << std::endl;
   }
-}; //
+}; 
 
 
 
@@ -293,7 +306,6 @@ int main(int argc, char** argv) {
   engine.start();  // Run the engine
 
   const double runtime = timer.current_time();
-  engine.aggregate_now("residual");
   std::cout << "Graphlab finished, runtime: " << runtime << " seconds." 
             << std::endl
             << "Updates executed: " << engine.last_update_count() 
@@ -302,7 +314,7 @@ int main(int argc, char** argv) {
             << engine.last_update_count() / runtime
             << std::endl;
 
-
+  engine.aggregate_now("residual");
   
   if (output) {
     std::string fname = "results_";
@@ -311,9 +323,7 @@ int main(int argc, char** argv) {
     for (size_t i = 0;i < graph.get_local_graph().num_vertices(); ++i) {
       if (graph.l_get_vertex_record(i).owner == dc.procid()) {
         fout << graph.l_get_vertex_record(i).gvid << "\t" 
-             << graph.l_get_vertex_record(i).num_in_edges + 
-          graph.l_get_vertex_record(i).num_out_edges << "\t" 
-             << graph.get_local_graph().vertex_data(i).value << "\t";
+             << graph.get_local_graph().vertex_data(i).value << "\n";
         //             << graph.get_local_graph().vertex_data(i).nupdates << "\n";
       }
     }
