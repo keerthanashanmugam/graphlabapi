@@ -81,6 +81,13 @@ set(JSONSL_LIB_DIR ${GraphLab_SOURCE_DIR}/deps/local/lib)
 # SVN_REPOSITORY http://svn.boost.org/svn/boost/trunk
 #   
 
+check_library_exists(z zlibVersion "" ZLIB_FOUND)
+if (ZLIB_FOUND)
+  add_definitions(-DHAS_ZLIB)
+  link_libraries(z)
+endif()
+
+
 # Build Boost
 ExternalProject_Add(boost
   PREFIX ${GraphLab_SOURCE_DIR}/deps/boost
@@ -366,7 +373,7 @@ endif()
 
 
 
-check_library_exists(z zlibVersion "" ZLIB_FOUND)
+#check_library_exists(z zlibVersion "" ZLIB_FOUND)
 if (ZLIB_FOUND)
   add_definitions(-DHAS_ZLIB)
   link_libraries(z)
