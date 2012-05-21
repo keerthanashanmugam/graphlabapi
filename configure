@@ -1,0 +1,344 @@
+#!/bin/bash
+
+function download_file {
+  # detect wget
+  echo "Downloading $2 from $1 ..."
+  if [ -z `which wget` ] ; then
+    if [ -z `which curl` ] ; then
+      echo "Unable to find either curl or wget! Cannot proceed with automatic install."
+      exit 1
+    fi
+    curl $1 -o $2
+  else
+    wget $1 -O $2
+  fi
+}
+
+
+## Ensure exit on error:
+# set -e
+
+
+
+
+## Begin logging in config.log
+LOG_FILE=config.log
+date | tee $LOG_FILE
+
+## Define some defaults which are modified by the script and whatever
+## is defined in configure.deps
+RELEASE_DIR=release
+DEBUG_DIR=debug
+PROFILE_DIR=profile
+INSTALL_DIR=/usr/local
+EXPERIMENTAL=false
+GRAPHLAB_HOME=$PWD
+
+DEPS_PREFIX=$PWD/deps/local
+
+
+## Overwrite defaults if they are available
+if [ -f configure.deps ]; then
+  source configure.deps
+fi
+
+
+function print_help {
+  echo "Usage: ./configure [--prefix=PREFIX] [--experimental]"
+  echo
+  echo "      --cleanup               remove all build directories"
+  echo 
+  echo "      --yes                   automatically install dependencies locally if they are not met."
+  echo
+  echo "      --prefix=[PREFIX]       GraphLab Installation target directory. Defaults to /usr/local"
+  echo 
+  echo "      --experimental          Turns on undocumented experimental distributed capabilities. "
+  echo 
+  echo "      --itpp                  Try to automatically build itpp"
+  echo
+  echo "      --itpp_include_dir=[DIR] specify manually itpp include directories (path to itpp header files)."
+  echo 
+  echo "      --itpp_link_dir=[DIR]   specify manually itpp link dir (path to libitpp.a lib)."
+  echo
+  echo "      -D something=something  specify definitions to be passed on to cmake."
+  echo
+  exit 1
+}
+
+function run_cleanup {
+  #!/bin/bash
+  echo "This script completely erases all build folders including dependencies!!!"
+  echo "Are you sure you want to continue? (yes or no)"
+  read yesorno;
+  if [ "$yesorno" == "yes" ]; then 
+    echo "Removing release debug and profile folders";
+    rm -rf release debug profile deps configure.deps
+  else
+    echo "Doing nothing!";
+  fi 
+  exit 1
+}
+
+
+function unknown_option {
+  echo "Unrecognized option: $1"
+  echo "To get help, run ./configure --help"
+  exit 1
+}
+
+config_flags=""
+
+while [ $# -gt 0 ]
+  do case $1 in
+    --help)                 print_help ;;
+    --cleanup)              run_cleanup ;;
+    --yes)                  always_yes=1;;
+    --prefix=*)             prefix=${1##--prefix=} ;;
+    --experimental)         experimental=1 ;;
+    --itpp)                 itpp=1 ;;
+    --itpp_include_dir=*)   itpp_include_dir=${1##--itpp_include_dir=} ;;
+    --itpp_link_dir=*)      itpp_link_dir=${1##--itpp_link_dir=} ;;
+    -D)                     config_flags="$config_flags -D $2"; shift ;;
+    *) unknown_option $1 ;;
+  esac
+  shift
+done
+
+##==========================================================
+##  Construct configure.deps file specifying the necessary environment
+##  variables
+
+# Create a configure deps if no such file already exists
+if [ ! -f configure.deps ]; then
+  # Initialize with default settings
+  echo "RELEASE_DIR=$RELEASE_DIR"     >> configure.deps
+  echo "DEBUG_DIR=$DEBUG_DIR"         >> configure.deps
+  echo "PROFILE_DIR=$PROFILE_DIR"     >> configure.deps
+fi
+
+# Enable or disable experimental graphlab components
+if [ ! -z $experimental ]; then
+  echo "EXPERIMENTAL=true"       >> configure.deps
+fi
+
+check_version()
+{
+    local version=$1 check=$2
+    local winner=$(echo -e "$version\n$check" | sed '/^$/d' | sort -nr | head -1)
+    [[ "$winner" = "$version" ]] && return 0
+    return 1
+}
+
+## ===================================================================
+# Force the use of gcc-4.2 as the default compiler on macs
+if [[ "$OSTYPE" == "Darwin*" ]]; then
+  echo "Running on OSX"  
+  echo "If no compiler is set we will try to use gcc-4.2"
+  if [[ -z $CC ]]; then
+    echo "switching gcc to gcc-4.2"
+    export CC="gcc-4.2"
+  fi
+  if [[ -z $CXX ]]; then 
+    echo "switching c++ to c++-4.2"
+    export CXX="c++-4.2"
+  fi
+fi
+
+
+
+## Install cmake
+if [ `which cmake` ]; then
+  #test cmake version
+  echo "Testing existing cmake version..."
+  currentversion=`cmake --version | tr -dc '[0-9].'`
+  echo "Detected $currentversion . Required 2.8.3"
+  check_version "2.8.3" $currentversion
+  versionok=$?
+  if [ $versionok -eq 1 ]; then
+    echo "CMake version is good"
+    CMAKE="cmake"
+  fi
+fi
+
+# CMake not found and there is a cmake in the deps directory!
+if [ -z $CMAKE ] && [ -f $DEPS_PREFIX/bin/cmake ]; then 
+  #test cmake version
+  echo "Testing existing cmake version..."
+  currentversion=`$DEPS_PREFIX/bin/cmake --version | tr -dc '[0-9].'`
+  echo "Detected $currentversion . Required 2.8.3"
+  check_version "2.8.3" $currentversion
+  versionok=$?
+  if [ $versionok -eq 1 ]; then
+    echo "CMake version is good"
+    CMAKE=$DEPS_PREFIX/bin/cmake
+  fi
+fi
+
+if [ -z $CMAKE ]; then
+  echo "This script will now proceed to download CMake and set it up in"
+  echo "the local graphlabapi/deps directory. The GraphLab compilation "
+  echo "process will be directed to use graphlabapi/deps/cmake."
+  pushd .
+  mkdir deps
+  cd deps
+
+  # get the cmake software page
+  rm -f software.html
+  download_file "http://www.cmake.org/cmake/resources/software.html" software.html
+  # look for the first tar.gz I can download
+  cmakedownload=`grep -m 1 -o -e "href=\"http://www\\.cmake.*\\.tar\\.gz\"" software.html | grep -o -e "http.*\\.tar\\.gz"`
+  if [ -z "$cmakedownload" ] ; then
+    echo "Unable to locate CMake package. You will have to install it yourself."
+    exit 1
+  fi
+  rm -f cmake.tar.gz
+  set -e
+  download_file $cmakedownload cmake.tar.gz
+  tar -xzvf cmake.tar.gz
+  # cd into the extracted directory and install
+  cd cmake-*
+  ./configure --prefix=$DEPS_PREFIX
+  make -j2
+  make install
+  set +e
+  popd 
+  CMAKE=$DEPS_PREFIX/bin/cmake
+  echo "CMAKE=$CMAKE" >> configure.deps
+fi
+
+
+
+
+
+
+
+
+# Run the configure deps
+source configure.deps 
+
+
+
+
+$CMAKE --version | tee -a $LOG_FILE
+
+if [ ! -z $install_eigen ]; then
+  source ./scripts/eigen_install.sh  | tee -a $LOG_FILE
+  echo "Eigen setup OK"
+  echo "HAS_EIGEN=true"      >> configure.deps
+# Try to build itpp
+elif [ ! -z $itpp ]; then
+  source ./scripts/itpp_install.sh | tee -a $LOG_FILE
+fi
+
+
+
+
+#if the prefix is not specified
+if [ ! -z $prefix ]; then
+  echo "INSTALL_DIR=$prefix"     >> configure.deps
+fi
+
+
+
+
+# Run the configure deps
+source configure.deps 
+
+
+echo -e \
+    "======================= BUILD CONFIGURATION ========================\n"\
+    "System Information: " | tee -a $LOG_FILE
+uname -v | tee -a $LOG_FILE
+echo "GCC Information: " | tee -a $LOG_FILE
+gcc --version | tee -a $LOG_FILE
+g++ --version | tee -a $LOG_FILE
+
+echo -e \
+    "Release build path:        $RELEASE_DIR \n"\
+    "Debug build path:          $DEBUG_DIR \n"\
+    "Profile build path:        $PROFILE_DIR \n"\
+    "Install path:              $INSTALL_DIR \n"\
+    "Build experimental parts:  $EXPERIMENTAL \n" | tee -a $LOG_FILE
+
+
+
+
+# Construct config flags for cmake
+if [ ! -z $INSTALL_DIR ]; then
+    config_flags="$config_flags -D CMAKE_INSTALL_PREFIX:STRING=$INSTALL_DIR"
+fi
+
+
+
+if [ ! -z $EXPERIMENTAL ]; then
+    config_flags="$config_flags -D EXPERIMENTAL:BOOL=$EXPERIMENTAL"
+fi
+
+
+if [ ! -z $itpp_link_dir ]; then
+    config_flags="$config_flags -D ITPP_LINK_DIR:STRING=$itpp_link_dir"
+fi
+
+if [ ! -z $itpp_include_dir ]; then
+   config_flags="$config_flags -D ITPP_INCLUDE_DIR:STRING=$itpp_include_dir"
+fi
+
+### CONSTRUCT THE BUILD DIRECTORIES ===========================================
+
+set -e
+
+echo -e "\n\n\n======================= Release ========================" \
+    | tee -a $LOG_FILE 
+
+
+
+if [ ! -d $RELEASE_DIR ]; then
+    mkdir $RELEASE_DIR
+fi
+cd $RELEASE_DIR
+rm -f CMakeCache.txt
+build_cmd="$CMAKE \
+    -D CMAKE_BUILD_TYPE=Release \
+    $config_flags \
+    ../."
+echo $build_cmd | tee -a "../$LOG_FILE"
+eval $build_cmd | tee -a "../$LOG_FILE"
+cd $GRAPHLAB_HOME
+
+
+echo -e "\n\n\n======================= Debug =========================" \
+    | tee -a $LOG_FILE 
+
+if [ ! -d $DEBUG_DIR ]; then
+    mkdir $DEBUG_DIR
+fi
+cd $DEBUG_DIR
+rm -f CMakeCache.txt
+build_cmd="$CMAKE \
+    -D CMAKE_BUILD_TYPE=Debug \
+    $config_flags \
+    ../."
+echo $build_cmd | tee -a ../$LOG_FILE
+eval $build_cmd | tee -a ../$LOG_FILE
+cd $GRAPHLAB_HOME
+
+
+echo -e "\n\n\n======================= Profile ========================" \
+    | tee -a $LOG_FILE 
+
+if [ ! -d $PROFILE_DIR ]; then
+    mkdir $PROFILE_DIR
+fi
+cd $PROFILE_DIR
+rm -f CMakeCache.txt
+build_cmd="$CMAKE \
+    -D CMAKE_BUILD_TYPE=Release \
+    -D COMPILE_PROFILING=1 \
+    $config_flags \
+    ../."
+
+echo $build_cmd | tee -a ../$LOG_FILE
+eval $build_cmd | tee -a ../$LOG_FILE
+cd $GRAPHLAB_HOME
+
+
