@@ -130,6 +130,8 @@ namespace graphlab {
     typedef typename local_graph_type::edge_type       local_edge_type;
     typedef typename local_edge_type::edge_dir         ledge_dir_type;
 
+    graphlab::hdfs hdfs;
+
     
     /** This class represents an edge with source() and target()*/
     class edge_type {
@@ -903,7 +905,6 @@ namespace graphlab {
 
       logstream(LOG_INFO) << "Load graph from " << fname << std::endl;
       if(boost::starts_with(fname, "hdfs://")) {
-        graphlab::hdfs hdfs;
         graphlab::hdfs::fstream in_file(hdfs, fname);
         boost::iostreams::filtering_stream<boost::iostreams::input> fin;  
         fin.push(in_file);
@@ -925,19 +926,22 @@ namespace graphlab {
     } // end of load
 
     /** \brief Load part of the distributed graph from a path*/
-    void save(std::string& path, std::string& prefix) {
+    void save(std::string& path, std::string& prefix, bool gzip = false) {
       timer savetime;  savetime.start();
       std::ostringstream ss;
-      ss << prefix << rpc.procid() << ".bin";
+      if (gzip)
+        ss << prefix << rpc.procid() << ".gz";
+      else 
+        ss << prefix << rpc.procid() << ".bin";
       std::string fname = ss.str();
       if (path.substr(path.length()-1, 1) != "/")
         path.append("/");
       fname = path.append(fname);
       logstream(LOG_INFO) << "Save graph to " << fname << std::endl;
       if(boost::starts_with(fname, "hdfs://")) {
-        graphlab::hdfs hdfs;
         graphlab::hdfs::fstream out_file(hdfs, fname, true);
         boost::iostreams::filtering_stream<boost::iostreams::output> fout;  
+        if(gzip) fout.push(boost::iostreams::gzip_compressor());
         fout.push(out_file);
         if (!fout.good()) {
           logstream(LOG_FATAL) << "Error opening file: " << fname << std::endl;
@@ -945,19 +949,91 @@ namespace graphlab {
         }
         oarchive oarc(fout);
         oarc << *this;
+        if (gzip) fout.pop();
         fout.pop();
         out_file.close();
       } else {
-        std::ofstream fout(fname.c_str());
+        boost::iostreams::filtering_stream<boost::iostreams::output> fout;  
+        std::ofstream out_file(fname.c_str());
+        if(gzip) fout.push(boost::iostreams::gzip_compressor());
+        fout.push(out_file);
         oarchive oarc(fout);
         oarc << *this;
-        fout.close();
+        if(gzip) fout.pop();
+        fout.pop();
+        out_file.close();
       }
       rpc.full_barrier();
       logstream(LOG_INFO) << "Finish saving graph to " << fname << std::endl;
       std::cout << "Finished saving binary graph: " 
                 << savetime.current_time() << std::endl;
     } // end of save
+
+    void checkpoint(std::string& path, std::string& prefix="x",  size_t version = 0, bool gzip = true) {
+      const std::vector<EdgeData> &edatalist = local_graph.get_edge_data_storage();
+      const std::vector<VertexData> &vdatalist = local_graph.get_vertex_data_storage();
+
+      size_t nverts = vdatalist.size();
+      size_t nedges = edatalist.size();
+      size_t ncpu = 8;
+      std::vector<std::string> vdatanames(ncpu);
+      std::vector<std::string> edatanames(ncpu);
+
+      std::string suffix = gzip ? "gz" : "bin";
+      if (path.substr(path.length()-1, 1) != "/")
+        path.append("/");
+
+      for (size_t i = 0; i < ncpu; ++i) {
+        std::ostringstream ss;
+        ss << path << prefix << rpc.procid() << "_thr" << i << ".ver" <<version;
+        vdatanames[i] = (ss.str() + ".vdata." + suffix);
+        edatanames[i] = (ss.str() + ".edata." + suffix);
+      }
+      
+      int vchunksize = (1 + (nverts-1)/ncpu);
+      int echunksize = (1 + (nedges-1)/ncpu);
+
+
+#pragma omp parallel for
+      for (ssize_t i = 0; i < ncpu; ++i) {
+        savedata(vdatalist, i*vchunksize, std::min(((size_t)i+1)*vchunksize, nverts), vdatanames[i], gzip);
+        savedata(edatalist, i*echunksize, std::min(((size_t)i+1)*echunksize, nedges), edatanames[i], gzip);
+      }
+    }
+
+    template <typename T>
+      void savedata(const std::vector<T>& values, size_t begin, size_t end, const std::string& fname, bool gzip) {
+        ASSERT_LE(end, values.size());
+        ASSERT_LE(begin, end);
+        if(boost::starts_with(fname, "hdfs://")) {
+          graphlab::hdfs::fstream out_file(hdfs, fname, true);
+          boost::iostreams::filtering_stream<boost::iostreams::output> fout;  
+          if(gzip) fout.push(boost::iostreams::gzip_compressor());
+          fout.push(out_file);
+          if (!fout.good()) {
+            logstream(LOG_FATAL) << "Error opening file: " << fname << std::endl;
+            exit(-1);
+          }
+          oarchive oarc(fout);
+          for (size_t i = begin; i < end; ++i) oarc << values[i];
+          if(gzip) fout.pop();
+          fout.pop();
+          out_file.close();
+        } else {
+          boost::iostreams::filtering_stream<boost::iostreams::output> fout;  
+          std::ofstream out_file(fname.c_str());
+          if(gzip) fout.push(boost::iostreams::gzip_compressor());
+          fout.push(out_file);
+          oarchive oarc(fout);
+          for (size_t i = begin; i < end; ++i) oarc << values[i];
+          if(gzip) fout.pop();
+          fout.pop();
+          out_file.close();
+        }
+      }
+
+
+
 
 
 
