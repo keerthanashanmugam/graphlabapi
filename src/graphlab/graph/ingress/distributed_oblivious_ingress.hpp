@@ -33,6 +33,7 @@
 #include <graphlab/rpc/distributed_event_log.hpp>
 #include <graphlab/util/dense_bitset.hpp>
 #include <graphlab/util/cuckoo_map_pow2.hpp>
+#include <graphlab/util/synchronized_unordered_map2.hpp>
 #include <graphlab/macros_def.hpp>
 namespace graphlab {
   template<typename VertexData, typename EdgeData>
@@ -59,10 +60,11 @@ namespace graphlab {
     /** The map from vertex id to pairs of <pid, local_degree_of_v> */
     // typedef typename boost::unordered_map<vertex_id_type, std::vector<size_t> > degree_hash_table_type;
     typedef fixed_dense_bitset<graph_type::MAX_MACHINES> bin_counts_type; 
-    typedef cuckoo_map_pow2<vertex_id_type, bin_counts_type,3,uint32_t> degree_hash_table_type;
+    // typedef cuckoo_map_pow2<vertex_id_type, bin_counts_type,3,uint32_t> degree_hash_table_type;
+    typedef synchronized_unordered_map2<bin_counts_type> degree_hash_table_type;
     degree_hash_table_type dht;
 
-    std::vector<size_t> proc_num_edges;
+    std::vector< atomic<size_t> > proc_num_edges;
 
     bool usehash;
     bool userecent;
@@ -70,7 +72,7 @@ namespace graphlab {
   public:
     distributed_oblivious_ingress(distributed_control& dc, graph_type& graph, bool usehash = false, bool userecent = false) :
       base_type(dc, graph),
-      dht(-1),proc_num_edges(dc.numprocs()), usehash(usehash), userecent(userecent) { 
+      dht(8),proc_num_edges(dc.numprocs()), usehash(usehash), userecent(userecent) { 
 
       INITIALIZE_TRACER(ob_ingress_compute_assignments, "Time spent in compute assignment");
      }
@@ -79,12 +81,51 @@ namespace graphlab {
 
     void add_edge(vertex_id_type source, vertex_id_type target,
                   const EdgeData& edata) {
-      dht[source]; dht[target];
+      // Fetch information about source, target from DHT
+      bin_counts_type source_map_cache;
+      bin_counts_type target_map_cache;
+      
+      dht.read_critical_section(source);
+      std::pair<bool, bin_counts_type*> pair = dht.find(source);
+      if (pair.first) source_map_cache = *(pair.second);
+      dht.release_critical_section(source);
+
+      dht.read_critical_section(target);
+      pair = dht.find(target);
+      if (pair.first) target_map_cache = *(pair.second);
+      dht.release_critical_section(target);
+
+      // Assign proc to new edge
       const procid_t owning_proc = 
-        base_type::edge_decision.edge_to_proc_greedy(source, target, dht[source], dht[target], proc_num_edges, usehash, userecent);
+        base_type::edge_decision.edge_to_proc_greedy(source, target, source_map_cache, target_map_cache, proc_num_edges, usehash, userecent);
+
+      // Update assignment DHT 
+      dht.write_critical_section(source);
+        pair = dht.find(source);
+        if (pair.first) { 
+          if (userecent) pair.second->clear();
+          pair.second->set_bit(owning_proc);
+        } else {
+          dht.insert(source, source_map_cache);
+        }
+      dht.release_critical_section(source);
+
+      dht.write_critical_section(target);
+        pair = dht.find(target);
+        if (pair.first) { 
+          if (userecent) pair.second->clear();
+          pair.second->set_bit(owning_proc);
+        } else {
+          dht.insert(target, target_map_cache);
+        }
+      dht.release_critical_section(target);
+
+      proc_num_edges[owning_proc].inc();
+
       typedef typename base_type::edge_buffer_record edge_buffer_record;
       edge_buffer_record record(source, target, edata);
       base_type::edge_exchange.send(owning_proc, record);
+
     } // end of add edge
 
     virtual void finalize() {

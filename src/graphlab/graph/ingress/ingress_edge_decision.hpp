@@ -166,7 +166,7 @@ namespace graphlab {
           const vertex_id_type target,
           bin_counts_type& src_degree,
           bin_counts_type& dst_degree,
-          std::vector<size_t>& proc_num_edges,
+          std::vector< atomic<size_t> >& proc_num_edges,
           bool usehash = false,
           bool userecent = false
           ) {
@@ -219,13 +219,6 @@ namespace graphlab {
         best_proc = top_procs[hash_function(edge_pair) % top_procs.size()];
 
         ASSERT_LT(best_proc, numprocs);
-        if (userecent) {
-          src_degree.clear();
-          dst_degree.clear();
-        }
-        src_degree.set_bit(best_proc);
-        dst_degree.set_bit(best_proc);
-        ++proc_num_edges[best_proc];
         return best_proc;
       };
   };// end of ingress_edge_decision
