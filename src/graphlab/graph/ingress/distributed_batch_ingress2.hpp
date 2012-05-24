@@ -93,7 +93,7 @@ namespace graphlab {
     mutex edgesend_lock;
     std::vector<boost::unordered_set<vertex_id_type> > query_set;
     /** The map from proc_id to num_edges on that proc */
-    std::vector<size_t> proc_num_edges;
+    std::vector< atomic<size_t> > proc_num_edges;
 
     DECLARE_TRACER(batch_ingress_add_edge);
     DECLARE_TRACER(batch_ingress_add_edges);
@@ -290,6 +290,14 @@ namespace graphlab {
        bin_counts_type& dst_degree = degree_table[dst_proc][e.second];
        procid_t proc = base_type::edge_decision.edge_to_proc_greedy(e.first, e.second, 
            src_degree, dst_degree, proc_num_edges, usehash, userecent);
+
+       if (userecent) {
+         src_degree.clear();
+         dst_degree.clear();
+       }
+       src_degree.set_bit(proc);
+       dst_degree.set_bit(proc);
+       proc_num_edges[proc].inc();
        END_TRACEPOINT(batch_ingress_compute_assignments);
 
        ASSERT_LT(proc, proc_src.size());
