@@ -583,6 +583,11 @@ namespace graphlab {
       return gstore.get_edge_data();
     }
 
+    const std::vector<EdgeData> & get_vertex_data_storage() const {
+      return vertices; 
+    }
+
+
     /**
      * \brief save the adjacency structure to a text file.
      *
