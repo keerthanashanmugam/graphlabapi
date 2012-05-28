@@ -169,7 +169,7 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
       }
 
       total_lines++;
-      singlerating thisrating(from, to, rating, time);
+      singlerating thisrating(from, to, rating, get_day(time));
       if (debug && (total_lines % 50000 == 0))
         logstream(LOG_INFO) << "Parsed line: " << total_lines << " selected lines: " << added << std::endl;
 

@@ -69,12 +69,14 @@ struct stringzipparser_update :
    gzip_in_file fin(vdata.filename +  (info ? ".data" : ""), gzip);
    //gzip_out_file fout(vdata.filename + ".out", gzip); 
    FILE * pfile = open_file((vdata.filename + ".out").c_str(), "w");
+   FILE * pusers_file = open_file((vdata.filename + ".users").c_str(), "w");
     char linebuf[24000];
     char saveptr[1024];
     int last_from = -1, last_to = -1;
     std::vector<singlerating> multiple_ratings;
     int rows, cols;
     size_t nz;
+    int users = 0;
  
     MM_typecode matcode;
     if (!info){
@@ -147,6 +149,8 @@ struct stringzipparser_update :
         } 
         //fout.get_sp()<<endl;
         fprintf(pfile, "\n");
+        users++;
+        fprintf(pusers_file, "%d\n", last_from);
         //fout.get_sp().strict_sync();
         if (thisrating.user < multiple_ratings[0].user)
            logstream(LOG_FATAL)<<"Input file is not sorted properly in line: " << total_lines << " first column is smaller thna previous first column"<<endl;
@@ -163,17 +167,19 @@ struct stringzipparser_update :
    if (total_lines != nz)
      logstream(LOG_FATAL)<<"Expected a total of " << nz << " lines, while in practice tehre where: " << total_lines << endl;
    assert(multiple_ratings.size() > 0);
-        fprintf(pfile, "0 | ");
-        for (uint i=0; i< multiple_ratings.size(); i++){
-          //fout.get_sp()<<multiple_ratings[i].item<<":"<<multiple_ratings[i].rating<<" ";
-          fprintf(pfile, "%d:%lg ", multiple_ratings[i].item, multiple_ratings[i].rating);
-        } 
-        //fout.get_sp()<<endl;
-        fprintf(pfile, "\n");
-        //fout.get_sp().strict_sync();
-        multiple_ratings.clear();
-        
-
+   fprintf(pfile, "0 | ");
+   for (uint i=0; i< multiple_ratings.size(); i++){
+     //fout.get_sp()<<multiple_ratings[i].item<<":"<<multiple_ratings[i].rating<<" ";
+     fprintf(pfile, "%d:%lg ", multiple_ratings[i].item, multiple_ratings[i].rating);
+   } 
+   //fout.get_sp()<<endl;
+   fprintf(pfile, "\n");
+   users++;
+   fprintf(pusers_file, "%d\n", last_from);
+         //fout.get_sp().strict_sync();
+   multiple_ratings.clear();
+   fclose(pfile); fclose(pusers_file); 
+   logstream(LOG_INFO)<<"Total of " << users << " found." << endl;
   }
 
 

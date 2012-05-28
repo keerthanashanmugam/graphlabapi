@@ -29,8 +29,11 @@
 #include "graphlab.hpp"
 #include "../shared/io.hpp"
 #include "../shared/types.hpp"
+#include "boost/date_time/posix_time/posix_time.hpp"
 using namespace graphlab;
 using namespace std;
+
+int get_day(time_t pt);
 
 string datafile;
 bool debug = false;
@@ -116,7 +119,7 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
             fprintf(pfile, "%d %d %d %d\n", 
                     edges[j].source() + 1, 
                     edges[j].target() -nodes + 1, -1, 
-                    (int)_graph.edge_data(edges[j]).weight);
+                    get_day((int)_graph.edge_data(edges[j]).weight)-283);
             }
         }
      
