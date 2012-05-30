@@ -217,11 +217,8 @@ void dp::scatter(icontext_type& context, const edge_type& edge) {
   const graph_type::vertex_id_type neighbor = (context.vertex_id() == edge.source()) ? edge.target() : edge.source();
     
   // schedule
-  if (strcmp("self", cstring)){
-    context.schedule(neighbor, dp(std::string(cstring)));
-  }else {
-    context.schedule(neighbor, *this);
-  }
+  if (strcmp("self", cstring)) context.schedule(neighbor, dp(std::string(cstring)));
+  else context.schedule(neighbor, *this);
   
 }
 
