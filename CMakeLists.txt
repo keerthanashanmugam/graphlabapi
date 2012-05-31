@@ -118,6 +118,9 @@ add_definitions(-DHAS_EIGEN)
 include_directories(${GraphLab_SOURCE_DIR}/deps/local/include/eigen3)
 
 
+
+
+
 # Build Boost =================================================================
 # GraphLab relies heavily on the boost library for parsing program
 # options, filesystem support, random number generation, and 
@@ -158,17 +161,29 @@ foreach(blib ${Boost_LIBRARIES})
 endforeach()
 message(STATUS "Boost Shared libs: " ${Boost_SHARED_LIBRARIES})
 
+
 # TCMalloc  ===================================================================
 # We use tcmalloc for improved memory allocation performance
-ExternalProject_Add(tcmalloc
+ExternalProject_Add(libtcmalloc
   PREFIX ${GraphLab_SOURCE_DIR}/deps/tcmalloc
   URL http://gperftools.googlecode.com/files/gperftools-2.0.tar.gz
   URL_MD5 13f6e8961bc6a26749783137995786b6
   CONFIGURE_COMMAND <SOURCE_DIR>/configure --enable-frame-pointers --prefix=<INSTALL_DIR>
   INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local)
-link_libraries(tcmalloc)
+# link_libraries(tcmalloc)
 set(TCMALLOC-FOUND 1)
 add_definitions(-DHAS_TCMALLOC)
+
+# ImageMagick =================================================================
+ExternalProject_Add(imagemagick
+  PREFIX ${GraphLab_SOURCE_DIR}/deps/imagemagick
+  URL http://www.imagemagick.org/download/ImageMagick.tar.gz
+  URL_MD5 010b63a2542c4ec4918c8cb431c00356
+  CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR>
+  INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local)
+include_directories(${GraphLab_SOURCE_DIR}/deps/local/include/ImageMagick)
+
+
 
 # zlib  =======================================================================
 # We rely on the zlib library to read gzip compressed files
@@ -182,38 +197,40 @@ endif()
 # libevent ====================================================================
 # LibEvent is used in the RPC layer to manage the interaction between the 
 # TCP stack and the event handler threads
-ExternalProject_Add(event
+ExternalProject_Add(libevent
   PREFIX ${GraphLab_SOURCE_DIR}/deps/event
   URL http://iweb.dl.sourceforge.net/project/levent/libevent/libevent-2.0/libevent-2.0.18-stable.tar.gz
   URL_MD5 aa1ce9bc0dee7b8084f6855765f2c86a
   CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR>
   INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local)
-link_libraries(event)
-link_libraries(event_pthreads)
+#link_libraries(event)
+#link_libraries(event_pthreads)
 
 # JNI =========================================================================
 # We use JNI for jvm interfacing and for hdfs support.  We currently only 
 # detect the presence of java and do not install our own version. 
+find_package(Java)
 find_package(JNI)
-if(EXISTS ${JAVA_INCLUDE_PATH}/jni.h  )
-  set(JNI_REALLY_FOUND 1 CACHE BOOL "Tests whether the header
-  actually exists")
-message(STATUS "jni.h was found at " ${JAVA_INCLUDE_PATH}/jni.h)
-include_directories(${JNI_INCLUDE_DIRS})
-## Guess java home location   
-if(EXISTS $ENV{JAVA_HOME} )
-  set(JAVA_HOME $ENV{JAVA_HOME} CACHE STRING "Location of Java Home")
-  message(STATUS "Java home set by user: " ${JAVA_HOME})
-else()
-  string(REGEX REPLACE "\\/include" "" JAVA_HOME_GUESS  ${JAVA_AWT_INCLUDE_PATH})
-  set(JAVA_HOME ${JAVA_HOME_GUESS} CACHE STRING "Location of Java Home")
-  message(STATUS "Java Home guessed: " ${JAVA_HOME})
+
+if(NOT BROKEN_JAVAC)
+  if((EXISTS ${JAVA_INCLUDE_PATH}/jni.h))
+    set(JNI_REALLY_FOUND 1 CACHE BOOL "Tests whether the header actually exists")
+    message(STATUS "jni.h was found at " ${JAVA_INCLUDE_PATH}/jni.h)
+    include_directories(${JNI_INCLUDE_DIRS})
+    ## Guess java home location   
+    if(EXISTS $ENV{JAVA_HOME} )
+      set(JAVA_HOME $ENV{JAVA_HOME} CACHE STRING "Location of Java Home")
+      message(STATUS "Java home set by user: " ${JAVA_HOME})
+    else()
+      string(REGEX REPLACE "\\/include" "" JAVA_HOME_GUESS  ${JAVA_AWT_INCLUDE_PATH})
+      set(JAVA_HOME ${JAVA_HOME_GUESS} CACHE STRING "Location of Java Home")
+      message(STATUS "Java Home guessed: " ${JAVA_HOME})
+    endif()
+  else( )
+    set(JNI_REALLY_FOUND 0 CACHE BOOL "Tests whether the header actually exists")
+    message(STATUS "jni.h was not found at " ${JAVA_INCLUDE_PATH}/jni.h)
+  endif( )
 endif()
-else( )
-  set(JNI_REALLY_FOUND 0 CACHE BOOL "Tests whether the header
-  actually exists")
-#  message(STATUS "jni.h was not found at " ${JAVA_INCLUDE_PATH}/jni.h)
-endif( )
 
 # Ant =========================================================================
 # Ant is used to build the graphlab JVM interface
@@ -439,10 +456,13 @@ macro(add_graphlab_executable NAME)
     ${MPI_LIBRARY} 
     ${MPI_EXTRA_LIBRARY} 
     ${Boost_LIBRARIES}
+    tcmalloc
+    event
+    event_pthreads
     )
-  add_dependencies(${NAME} eigen boost tcmalloc graphlab)
-  target_link_libraries(${NAME} graphlab)
+  add_dependencies(${NAME} boost libtcmalloc libevent graphlab)
 endmacro(add_graphlab_executable)
+
 
 
 # add_jni_library =============================================================
