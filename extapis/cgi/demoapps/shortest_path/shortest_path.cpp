@@ -16,7 +16,7 @@ double stof(const char *str){
   return atof(str);
 }
 
-void shortest_path_update(json::Document & invocation, json::Document& return_json){
+void shortest_path_update(json::Document& invocation, json::Document& return_json){
 
   json::Document::AllocatorType& allocator = return_json.GetAllocator();
   return_json.SetObject();
@@ -68,7 +68,6 @@ void shortest_path_update(json::Document & invocation, json::Document& return_js
 
 }
 
-// not thread-safe
 const char *handle_invocation(const char *buffer, json::StringBuffer& return_buffer){
 
   if (NULL == buffer) return NULL;

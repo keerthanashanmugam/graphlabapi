@@ -42,7 +42,7 @@ typedef dispatcher_update dp;
 enum update_style {BASIC, FACTORIZED};
 
 /** update style for this dispatcher */
-update_style UPDATE_STYLE = BASIC;
+update_style UPDATE_STYLE = FACTORIZED;
 
 /////////////////////////////// INSTANCE MEMBERS ///////////////////////////////
 
