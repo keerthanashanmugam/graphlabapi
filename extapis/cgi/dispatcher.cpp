@@ -28,6 +28,7 @@
 #include "dispatcher.hpp"
 #include "process.hpp"
 #include "json_message.hpp"
+#include "dispatcher_ops.hpp"
 #include <graphlab/macros_def.hpp>
 
 using namespace graphlab;
@@ -41,7 +42,7 @@ typedef dispatcher_update dp;
 enum update_style {BASIC, FACTORIZED};
 
 /** update style for this dispatcher */
-update_style UPDATE_STYLE = FACTORIZED;
+update_style UPDATE_STYLE = BASIC;
 
 /////////////////////////////// INSTANCE MEMBERS ///////////////////////////////
 
@@ -321,11 +322,9 @@ int main(int argc, char** argv) {
   core<dp::graph_type, dp> core;
   core.set_options(clopts);      // attach the command line options to the core
   std::cout << "Loading graph from file" << std::endl;
-  const bool success = graph_ops::
-    load_structure(graph_file, format, core.graph());
-  if(!success) {
+  const bool success = dispatcher_ops::load_structure(graph_file, core.graph());
+  if(!success)
     std::cout << "Error in reading file: " << graph_file << std::endl;
-  }
   
   // Signal Handling ----------------------------------------------------------
   struct sigaction sa;
@@ -347,6 +346,7 @@ int main(int argc, char** argv) {
             << std::endl;
 
   // Output Results -----------------------------------------------------------
+  dispatcher_ops::save_structure("output.graph", core.graph());
   return EXIT_SUCCESS;
   
 }

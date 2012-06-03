@@ -36,10 +36,12 @@ namespace graphlab {
 
   struct cgi_vertex {
     std::string state;
+    cgi_vertex() : state(""){};
   };
   
   struct cgi_edge {
     std::string state;
+    cgi_edge() : state(""){};
   };
   
   class json_return;
