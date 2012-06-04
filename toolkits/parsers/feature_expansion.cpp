@@ -34,14 +34,7 @@ using namespace std;
 bool debug = false;
 bool quick = true;
 bool gzip = false;
-string user_data_file;
-string item_data_file;
-string training_data, validation_data;
-string keywords_data_file;
-int nodes = 2421057;
-int split_training_time = 1320595199;
-int MAX_FEATURE = 410;
-int pos_offset = 0;
+string item_data_file, user_data_file;
 const int MATRIX_MARKET = 1;
 const int VW = 2;
 int output_format = 1;
@@ -80,7 +73,7 @@ typedef graph_type::edge_list_type edge_list;
 typedef graph_type2::edge_list_type edge_list2;
 
 int main(int argc,  char *argv[]) {
-  int col = 0;  
+  int col = 0, cols = 0, MAX_FEATURE = 0;  
   global_logger().set_log_level(LOG_INFO);
   global_logger().set_log_to_console(true);
 
@@ -96,7 +89,7 @@ int main(int argc,  char *argv[]) {
   clopts.attach_option("output_format", &output_format, output_format, "output format 1=Matrix market, 2=VW");
   clopts.attach_option("max_feature", &MAX_FEATURE, MAX_FEATURE, "max number of feature");
   clopts.attach_option("col", &col, col, "feature position to expand");
-
+  clopts.attach_option("cols", &cols, cols, "number of columns in item feature file");
   // Parse the command line arguments
   if(!clopts.parse(argc, argv)) {
     std::cout << "Invalid arguments!" << std::endl;
@@ -113,24 +106,24 @@ int main(int argc,  char *argv[]) {
     << "Currently implemented parsers are: Call data records, document tokens "<< std::endl;
   
   assert(col >=0 && col < MAX_FEATURE);
-
+  assert(cols > 0);
 
   timer mytimer; mytimer.start();
-  graph_type2 training;
   graph_type user_data, item_data;
   bipartite_graph_descriptor item_data_info;
-  load_matrixmarket_graph(item_data_file, item_data_info, item_data, MATRIX_MARKET_3, true);
+  item_data_info.cols = cols;
+  load_matrixmarket_graph(item_data_file, item_data_info, item_data, MATRIX_MARKET_1, true);
 
-  gzip_out_file fout(training_data + ".info", gzip);
-  gzip_out_file ffout(training_data + ".data", gzip);
-  gzip_in_file fin(training_data, gzip);
+  gzip_out_file fout(user_data_file + ".info", gzip);
+  gzip_out_file ffout(user_data_file + ".data", gzip);
+  gzip_in_file fin(user_data_file, gzip);
   MM_typecode out_typecode;
   mm_clear_typecode(&out_typecode);
   mm_set_real(&out_typecode); 
   mm_set_sparse(&out_typecode); 
   mm_set_matrix(&out_typecode);
   mm_write_cpp_banner(fout.get_sp(), out_typecode);
-
+  uint items = 0;
   char linebuf[10000]; 
   char saveptr[10000];
   int line = 0;
@@ -142,37 +135,38 @@ int main(int argc,  char *argv[]) {
 
       char *pch = strtok_r(linebuf," \r\n\t",(char**)&saveptr);
       if (!pch){
-        logstream(LOG_FATAL) << "Error when parsing file: " << training_data << ":" << line <<std::endl;
+        logstream(LOG_FATAL) << "Error when parsing file: " << user_data_file << ":" << line <<std::endl;
        }
-       ffout.get_sp()<<pch<<" ";
+       ffout.get_sp()<<pch<<" "; items++;
        
-       for (int j=0; j< MAX_FEATURE-1; j++){
-					pch = strtok_r(linebuf," \r\n\t",(char**)&saveptr);
-          if (!pch){
-            logstream(LOG_FATAL) << "Error when parsing file: " << training_data << ":" << line <<std::endl;
+       for (int j=1; j< MAX_FEATURE; j++){
+					pch = strtok_r(NULL," \r\n\t",(char**)&saveptr);
+          if (!pch)
+            logstream(LOG_FATAL) << "Error when parsing file: " << user_data_file << ":" << line <<std::endl;
              
-          ffout.get_sp()<<pch<< " ";
+          ffout.get_sp()<<pch<< " "; items++;
 
-          if (col == j){
+          if (col-1 == j){
 			       int pos = atoi(pch);
-             if (pos < j || pos > MAX_FEATURE)
-                logstream(LOG_FATAL)<<"Error on line: " << line << " position is not in range: " << pos << std::endl;
-             if (item_data.out_edges(pos).size() == 0)
+             if (pos <= 0 || pos > MAX_FEATURE)
+                logstream(LOG_FATAL)<<"Error on line: " << line << " col: " << col << " position is not in range: " << pos << std::endl;
+             if (item_data.out_edges(pos-1).size() == 0)
                 logstream(LOG_FATAL)<<"Did not find features for: " << pos << std::endl;
-					     for (uint k=0; k< item_data.out_edges(pos).size(); k++)
-                 ffout.get_sp()<< item_data.out_edges(pos)[k].target()<< " ";
+					  for (uint k=0; k< item_data.out_edges(pos-1).size(); k++){
+               ffout.get_sp()<< item_data.out_edges(pos-1)[k].target() + 1 - item_data_info.rows << " ";
+               items++;
+            }
              
            }
 
 
-          }
-          if (j == MAX_FEATURE -2)
-             ffout.get_sp()<<endl;
+        if (j == MAX_FEATURE -1)
+          ffout.get_sp()<<endl;
     } //for loop
     line++;
  }//while loop
 
-  std::cout << "Finished in " << mytimer.current_time() << " total lines: " << line << std::endl;
+  std::cout << "Finished in " << mytimer.current_time() << " total lines: " << line << " features: " << items << std::endl;
   return EXIT_SUCCESS;
 } //main
 
