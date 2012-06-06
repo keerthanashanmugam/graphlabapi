@@ -53,6 +53,7 @@ unsigned long long self_edges = 0;
 bool gzip = false;
 bool reverse_edges = false;
 bool no_edge_data = false;
+int matrix_market_tokens_per_row = MATRIX_MARKET_3;
 
 struct vertex_data {
   string filename;
@@ -99,6 +100,10 @@ struct stringzipparser_update :
     else if (!binary_input_format)
        load_graph(vdata.filename, "matrixmarket", info, graph, MATRIX_MARKET_3, false, true);
     else { info.rows = info.cols = nodes; info.nonzeros = nonzeros; }
+    if (nodes && square_matrix && info.rows == 0){
+       info.rows = nodes; info.cols = nodes;
+    }
+    assert(info.rows > 0 && info.cols > 0);
 
     FILE * deg_file = open_file(vdata.filename + ".nodes", "w");
     FILE * edge_file = open_file(vdata.filename + ".edges", "w");
@@ -133,7 +138,7 @@ struct stringzipparser_update :
 	      fin.getline(linebuf, 128);
 	      if (fin.eof())
 		break;
-	      if (!info_file && linebuf[0] == '%'){ //skip matrix market header
+	      if (linebuf[0] == '%'){ //skip matrix market header
 		 continue;
 	      }
 	      else if (!info_file && header){ //skip matrix market size
@@ -156,6 +161,7 @@ struct stringzipparser_update :
 		 return;
 	       }
 	       strncpy(buf2, pch, 20);
+               if (matrix_market_tokens_per_row > 2){
 		pch = strtok_r(NULL, "\r\n\t ;,",(char**)&saveptr);
 	      if (!pch && !no_edge_data){
 		logstream(LOG_ERROR) 
@@ -165,7 +171,8 @@ struct stringzipparser_update :
 	       }
 	       if (pch)
 		 strncpy(buf3, pch, 40);
-		
+		}
+
 		from = atoi(buf1);
 		to = atoi(buf2);
 		if (reverse_edges) //file is sorted by 2nd column
@@ -330,8 +337,9 @@ int main(int argc,  char *argv[]) {
   clopts.attach_option("binary_input_format", &binary_input_format, binary_input_format, "binary input format (uint 32 src,dest array)");
   clopts.attach_option("nodes", &nodes, nodes, "number of graph nodes (optional)");
   clopts.attach_option("info", &info_file, info_file, "matrix market header is given in a separate info file");
+  clopts.attach_option("matrix_market_tokens_per_row", &matrix_market_tokens_per_row, matrix_market_tokens_per_row, "mm tokens per row");
   //clopts.attach_option("nnz", &nonzeros, nonzeros "number of graph edges (optional)");
-  nonzeros = 4158052951; //5397526093; 
+  //nonzeros = 4158052951; //5397526093; 
   //lines = 5397526093;
   // Parse the command line arguments
   if(!clopts.parse(argc, argv)) {

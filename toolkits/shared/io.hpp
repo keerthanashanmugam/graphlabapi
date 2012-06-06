@@ -60,6 +60,7 @@ extern bool debug;
 
 enum matrix_market_parser{
    MATRIX_MARKET_1 = 1,
+   MATRIX_MARKET_2 = 2,
    MATRIX_MARKET_3 = 3,
    MATRIX_MARKET_4 = 4,
    MATRIX_MARKET_5 = 5,
@@ -328,8 +329,7 @@ bool load_matrixmarket_graph(const std::string& fname,
   FILE* fptr = open_file(fname.c_str(), "r", optional);
   if (optional && !fptr)
     return false;
- 
- 
+  
   // read Matrix market header
   MM_typecode matcode;
   if (!body_only){
@@ -343,16 +343,20 @@ bool load_matrixmarket_graph(const std::string& fname,
       <<  mm_typecode_to_str(matcode) << std::endl;
     }
     // load the matrix descriptor
-    if (mm_is_sparse(matcode) && mm_read_mtx_crd_size(fptr, &desc.rows, &desc.cols, &desc.nonzeros)) {
+    if (mm_is_sparse(matcode)){
+    if(mm_read_mtx_crd_size(fptr, &desc.rows, &desc.cols, &desc.nonzeros)) {
       logstream(LOG_FATAL) << "Error reading dimensions" << std::endl;
     }
-    else {
-      if (!mm_is_sparse(matcode) && mm_read_mtx_array_size(fptr, &desc.rows, &desc.cols)){
-        logstream(LOG_FATAL) << "Error reading dimensions" << std::endl;
-      }
     }
-   if (!mm_is_sparse(matcode))
-      desc.nonzeros = desc.rows * desc.cols; 
+    else {
+     int rows, cols;
+     if(mm_read_mtx_array_size(fptr, &rows, &cols)) {
+      logstream(LOG_FATAL) << "Error reading dimensions" << std::endl;
+    }
+     if (cols != 1 && cols != 2)
+        logstream(LOG_FATAL)<<"Wrong dimensions to input matrix, should be 1 column. Seen : " << rows << " x " << cols << std::endl; 
+    desc.nonzeros = rows;
+    }
   }
 
   std::cout << "Rows:      " << desc.rows << std::endl
@@ -370,7 +374,6 @@ bool load_matrixmarket_graph(const std::string& fname,
     int row = 0, col = 0;  
     double val = 0;
     double dtime = 0;
-
     if (parse_type == MATRIX_MARKET_1){
       if(fscanf(fptr, "%d\n", &col) != 1) {
         logstream(LOG_FATAL) 
@@ -380,7 +383,15 @@ bool load_matrixmarket_graph(const std::string& fname,
      row = i+1;
    }
 
-    //regular matrix market format. [from] [to] [val]
+
+    //regular matrix market format. [from] [to] 
+   else if (parse_type == MATRIX_MARKET_2){ 
+      if(fscanf(fptr, "%d %d\n", &row, &col) != 2) {
+        logstream(LOG_ERROR) 
+          << "Error reading file on line: " << i << std::endl;
+        return false;
+      }
+    }
     else if (parse_type == MATRIX_MARKET_3){ 
       if(fscanf(fptr, "%d %d %lg\n", &row, &col, &val) != 3) {
         logstream(LOG_ERROR) 
