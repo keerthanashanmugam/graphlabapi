@@ -187,6 +187,9 @@ struct stringzipparser_update :
 		    (size_t)val == info.nonzeros)
 		   continue;
 
+                if (from == 987654321 && to == 987654321)
+                   continue;
+
               from--; to--;
 	}
         else //binary input format
