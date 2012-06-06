@@ -54,8 +54,8 @@ struct vertex_data {
   bool active;
   unsigned short kcore;
   uint cur_links;
-
-  vertex_data() : active(true), kcore(-1), cur_links(0) {}
+  uint cur_in_links;
+  vertex_data() : active(true), kcore(-1), cur_links(0), cur_in_links(0) {}
 
   void add_self_edge(double value) { }
 
@@ -186,6 +186,8 @@ public:
         if (other.active){
 	  vdata.cur_links++;
           increasing_links++;
+          if (vdata.cur_links > iiter + 1)
+		break;
         }
     }
 
@@ -194,7 +196,9 @@ public:
      //for (size_t i =0; i < inedgeid.size(); i++){
         const vertex_data & other = context.const_vertex_data(*start);
           if (other.active)
-            vdata.cur_links++;
+            vdata.cur_in_links++;
+          if (vdata.cur_in_links > iiter + 1)
+               break;
      }
     }
    links += increasing_links;
@@ -226,7 +230,7 @@ public:
   void finalize() {
    if (num_active == 0)
 	links = 0;
-   printf("Number of active nodes in round %d is %ld, links: %ld at time %lg\n", iiter, num_active, links, gt.current_time());
+   logstream(LOG_ERROR)<< "Number of active nodes in round " << iiter << " is " << num_active << " links: " << links << "  at time" << gt.current_time() << std::endl;
    active_links_num[iiter] = links;
    active_nodes_num[iiter] = num_active;
 
@@ -335,7 +339,7 @@ int main(int argc,  char *argv[]) {
   graphlab::timer mytimer; mytimer.start();
   bool single_graph = (pmultigraph->num_graphs() == 1);
   bool first_time = true;
-  std::vector<uint> oldvec, newvec;
+  std::vector<uint> newvec;
   int pass = 0;
   for (iiter = start_core; iiter< max_iter+1; iiter++){
     logstream(LOG_INFO)<<mytimer.current_time() << ") Going to run k-cores iteration " << iiter << " at time: " << gt.current_time() << std::endl;
@@ -356,6 +360,7 @@ int main(int argc,  char *argv[]) {
          for (uint i=0; i< (uint)matrix_info.total(); i++){
            newvec.push_back(i);
          }
+         logstream(LOG_ERROR)<<"Starting to run with: " << newvec.size() << " graph nodes!" << std::endl;
        }
        pgraph = multigraph.graph(0);
 #ifdef USE_GRAPHLAB_ENGINE
@@ -364,12 +369,11 @@ int main(int argc,  char *argv[]) {
        core.add_global("NUM_ACTIVE", int(0));
        glcore->aggregate_now("sync"); 
 #else
+       std::random_shuffle(newvec.begin(), newvec.end());
 #pragma omp parallel for
        for (uint t=0; t< newvec.size(); t++){
-              if (newvec[t] < core.graph().num_vertices()){
-                dummy_context con(newvec[t]);
-                update_function_Axb(con);
-              }
+          dummy_context con(newvec[t]);
+          update_function_Axb(con);
        }
        if (!single_graph)
           multigraph.unload_all(); 
@@ -378,31 +382,37 @@ int main(int argc,  char *argv[]) {
       uint t;
       num_active = 0;
 
-#pragma omp parallel for private(t) reduction(+: num_active)
-     for (t =0; t< newvec.size(); t++){
-         vertex_data& vdata = pmultigraph->get_vertex_data(newvec[t]);
-        if ((vdata.cur_links <= (uint)iiter) && vdata.active){
+//#pragma omp parallel for private(t) reduction(+: num_active)
+     for (t =0; t< nodes; t++){
+         vertex_data& vdata = pmultigraph->get_vertex_data(t);
+        if (((vdata.cur_in_links <= (uint)iiter) || (vdata.cur_links <= (uint)iiter)) && vdata.active){
           vdata.active = false;
           vdata.kcore = iiter;
          
         }
        vdata.cur_links = 0;
+       vdata.cur_in_links = 0;
        if (vdata.active)
          num_active = num_active + 1;
      }
 
       finalize();
-    
-     oldvec = newvec;
+   
+     int prev_size = newvec.size();
+     logstream(LOG_ERROR)<<"Number of active node by count is: " << prev_size << std::endl;
      newvec.clear();
-     for (uint i=0; i< oldvec.size(); i++){
-        if (pmultigraph->get_vertex_data(oldvec[i]).active)
-            newvec.push_back(oldvec[i]);
+     for (uint i=0; i< nodes; i++){
+        if (pmultigraph->get_vertex_data(i).active)
+            newvec.push_back(i);
      } 
-
 #endif
       pass++;
+      if (newvec.size() > prev_size)
+        logstream(LOG_FATAL)<<"Bug: new vec size is: " << newvec.size() << " while previous size was: " << prev_size << std::endl;
+     
       size_t cur_nodes = active_nodes_num[iiter];
+      if (cur_nodes != newvec.size())
+        logstream(LOG_WARNING)<<"New vec size is: " << newvec.size() << " while active nodes are: " << cur_nodes << std::endl;
       if (prev_nodes == cur_nodes)
         break; 
     }
