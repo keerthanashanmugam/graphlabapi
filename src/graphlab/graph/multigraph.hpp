@@ -364,7 +364,7 @@ namespace graphlab {
 		void doload(int i, bool no_node_data = false, bool no_edge_data = false, bool one_sided = false, int nodes = 0){
        graphlab::timer mt; mt.start();
        graph3<VertexData,EdgeData> *graph = new graph3<VertexData,EdgeData>();
-       graph->load_directed(in_files[i], no_node_data, no_edge_data, one_sided);
+       graph->load_directed(in_files[i], no_node_data, no_edge_data, one_sided, nodes);
        logstream(LOG_INFO)<<"Time taken to load: " << mt.current_time() << std::endl;
        num_nodes = graph->num_vertices();
        if (node_vdata_array.size() == 0)

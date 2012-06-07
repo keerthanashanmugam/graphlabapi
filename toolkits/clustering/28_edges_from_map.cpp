@@ -298,12 +298,12 @@ int main(int argc,  char *argv[]) {
   core.add_global("NUM_NODES", numnodes);
   core.add_global("OUT_DIR", outdir);
 
-   gzip_in_file fin("/usr0/bickson/day01.sorted.gz");
+   gzip_in_file fin("/home/bickson/tmp/agg.by.time/day01.sorted");
     char linebuf[256];
    
     while(true){
       fin.get_sp().getline(linebuf, 128);
-      if (fin.get_sp().eof())
+      if (fin.get_sp().eof() || !fin.get_sp().good())
         break;
 
       edges_in_28[linebuf] = true;

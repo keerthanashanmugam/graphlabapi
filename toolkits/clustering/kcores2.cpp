@@ -47,6 +47,7 @@ using namespace graphlab;
 
 bool debug = false;
 int max_iter = 50;
+bool info_file = false;
 ivec active_nodes_num;
 ivec active_links_num;
 int iiter = 0; //current iteration
@@ -180,7 +181,8 @@ int main(int argc,  char *argv[]) {
   clopts.attach_option("max_iter", &max_iter, max_iter, "maximal number of cores");
   clopts.attach_option("nodes", &nodes, nodes, "number of nodes"); 
   clopts.attach_option("gzip", &gzip, gzip, "gzipped input file?");
- 
+  clopts.attach_option("info", &info_file, info_file, "matrix market header is given in a separate info file");
+  
   // Parse the command line arguments
   if(!clopts.parse(argc, argv)) {
     std::cout << "Invalid arguments!" << std::endl;

@@ -270,9 +270,22 @@ struct stringzipparser_update :
        }
      }
    }
+   else {
+    if (!reverse_edges){
+      for (uint k=num_degree_written; k < (uint)info.rows+1; k++){
+         fwrite(&edges_so_far, sizeof(int), 1, deg_file);
+         num_degree_written++;
+       }
+
+    }
+    else {
+      for (uint k=last_col; k < (uint)info.cols; k++){
+         fwrite(&edges_so_far, sizeof(int), 1, deg_file);
+         num_degree_written++;
+       }
+    }
+   }
    
-    fwrite(&edges_so_far, sizeof(int), 1, deg_file);
-    num_degree_written++;
     if (!square_matrix)
        assert(num_degree_written == info.rows+info.cols+1); 
     else {
