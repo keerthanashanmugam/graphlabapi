@@ -653,12 +653,17 @@ namespace graphlab {
   };
 
 
-   void do_load_directed(const std::string & filename, bool no_node_data, bool no_edge_data, int part, double & total_mb_allocated, bool one_sided){
+   void do_load_directed(const std::string & filename, bool no_node_data, bool no_edge_data, int part, double & total_mb_allocated, bool one_sided, uint nodes = 0){
      size_t rc = 0;
      switch(part){
          case PART_NODE_FILE:
             rc =array_from_file(filename + ".nodes", node_out_degrees);
 	    num_nodes = (rc/4)-1;
+            if (nodes > 0){
+              assert(nodes >= num_nodes);
+              num_nodes = nodes;
+            }
+              
             if (!no_node_data){
                if (node_vdata_array == NULL)
                   node_vdata_array = new VertexData[num_nodes];
@@ -670,6 +675,7 @@ namespace graphlab {
          case PART_NODE_REVERSE_FILE:
 	    if (one_sided) return;
             rc =array_from_file(filename + "-r.nodes", node_in_degrees);
+	    num_nodes = std::max(num_nodes, (rc/4)-1);
             total_mb_allocated += (num_nodes*sizeof(int))/1e6;
 	    break;
 

@@ -24,21 +24,28 @@
 #include <cstdio>
 #include <map>
 #include <iostream>
+#include <boost/unordered_map.hpp>
 #include "graphlab.hpp"
 #include "../shared/io.hpp"
 #include "../shared/types.hpp"
 using namespace graphlab;
 using namespace std;
 
+enum feature_types{
+  MATRIX_MARKET = 1,
+  STRING_TO_INT = 2
+};
 
 bool debug = false;
 bool quick = true;
 bool gzip = false;
 string item_data_file, user_data_file;
-const int MATRIX_MARKET = 1;
+boost::unordered_map<std::string, std::string> strmap;
 const int VW = 2;
 int output_format = 1;
-
+int fields = 2;
+int nodes; 
+int feature_type = MATRIX_MARKET;
 struct vertex_data {
   vertex_data(){ 
   }
@@ -74,6 +81,7 @@ typedef graph_type2::edge_list_type edge_list2;
 
 int main(int argc,  char *argv[]) {
   int col = 0, cols = 0, MAX_FEATURE = 0;  
+  int col2 = 0;
   global_logger().set_log_level(LOG_INFO);
   global_logger().set_log_to_console(true);
 
@@ -90,6 +98,10 @@ int main(int argc,  char *argv[]) {
   clopts.attach_option("max_feature", &MAX_FEATURE, MAX_FEATURE, "max number of feature");
   clopts.attach_option("col", &col, col, "feature position to expand");
   clopts.attach_option("cols", &cols, cols, "number of columns in item feature file");
+  clopts.attach_option("col2", &col2, col2, "feature position to expand number 2");
+  clopts.attach_option("rows", &nodes, nodes, "number of nodes");
+  clopts.attach_option("feature_type", &feature_type, feature_type, "feature type. 1= matrix market file. 2 = string to int map");
+  clopts.attach_option("fields", &fields, fields, "number of fields in item feature map");
   // Parse the command line arguments
   if(!clopts.parse(argc, argv)) {
     std::cout << "Invalid arguments!" << std::endl;
@@ -109,11 +121,16 @@ int main(int argc,  char *argv[]) {
   assert(cols > 0);
 
   timer mytimer; mytimer.start();
-  graph_type user_data, item_data;
+  graph_type item_data;
+  
   bipartite_graph_descriptor item_data_info;
   item_data_info.cols = cols;
-  load_matrixmarket_graph(item_data_file, item_data_info, item_data, MATRIX_MARKET_1, true);
-
+  item_data_info.force_non_square = true;
+  if (nodes > 0 ){
+     strmap.rehash(nodes);
+     load_map_from_txt_file(strmap, item_data_file, gzip, fields);
+  }
+  else assert(false);
   gzip_out_file fout(user_data_file + ".info", gzip);
   gzip_out_file ffout(user_data_file + ".data", gzip);
   gzip_in_file fin(user_data_file, gzip);
@@ -133,23 +150,18 @@ int main(int argc,  char *argv[]) {
      if (fin.get_sp().eof())
         break;
 
-      char *pch = strtok_r(linebuf," \r\n\t",(char**)&saveptr);
-      if (!pch){
-        logstream(LOG_FATAL) << "Error when parsing file: " << user_data_file << ":" << line <<std::endl;
-       }
-       ffout.get_sp()<<pch<<" "; items++;
-       
-       for (int j=1; j< MAX_FEATURE; j++){
-					pch = strtok_r(NULL," \r\n\t",(char**)&saveptr);
+       for (int j=0; j< MAX_FEATURE; j++){
+	  char * pch = strtok_r(j == 0 ? linebuf : NULL," \r\n\t",(char**)&saveptr);
           if (!pch)
             logstream(LOG_FATAL) << "Error when parsing file: " << user_data_file << ":" << line <<std::endl;
              
           ffout.get_sp()<<pch<< " "; items++;
 
-          if (col-1 == j){
+          if (col-1 == j || (col2 > 0 && col2-1 == j)){
 			       int pos = atoi(pch);
-             if (pos <= 0 || pos > MAX_FEATURE)
-                logstream(LOG_FATAL)<<"Error on line: " << line << " col: " << col << " position is not in range: " << pos << std::endl;
+             //if (pos <= 0 || pos > cols)
+             //   logstream(LOG_FATAL)<<"Error on line: " << line << " col: " << col << " position is not in range: " << pos << std::endl;
+             if (feature_type == MATRIX_MARKET){
              if (item_data.out_edges(pos-1).size() == 0)
                 logstream(LOG_FATAL)<<"Did not find features for: " << pos << std::endl;
 					  for (uint k=0; k< item_data.out_edges(pos-1).size(); k++){
@@ -158,6 +170,14 @@ int main(int argc,  char *argv[]) {
             }
              
            }
+           else {
+             if (strmap.find(pch) == strmap.end()) 
+                logstream(LOG_FATAL)<<"Did not find features for: " << pch << std::endl;
+             ffout.get_sp() << strmap[pch] << " ";      
+             items++;
+           }
+        }
+           
 
 
         if (j == MAX_FEATURE -1)
