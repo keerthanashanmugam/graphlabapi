@@ -50,6 +50,7 @@
 #include <boost/iostreams/filtering_stream.hpp>
 #include <boost/iostreams/copy.hpp>
 #include <boost/iostreams/filter/gzip.hpp>
+#include <boost/filesystem.hpp>
 
 
 #include <graphlab/logger/logger.hpp>
@@ -346,9 +347,9 @@ namespace graphlab {
      * \param mapfunction must be a unary function from vertex_type to
      * ResultType. it may be a unary functor or a function pointer.
      */
-    template <typename ResultType>
-    ResultType map_reduce_vertices(
-        boost::function<ResultType(vertex_type)> mapfunction) {
+    template <typename ResultType, typename MapFunctionType>
+    ResultType map_reduce_vertices(MapFunctionType mapfunction) {
+      ASSERT_TRUE(finalized);
       rpc.barrier();
       bool global_result_set = false;
       ResultType global_result = ResultType();
@@ -403,9 +404,9 @@ namespace graphlab {
      * \param mapfunction must be a unary function from edge_type to ResultType
      * it may be a unary functor or a function pointer.
      */
-    template <typename ResultType>
-    ResultType map_reduce_edges(
-        boost::function<ResultType(edge_type)> mapfunction) {
+    template <typename ResultType, typename MapFunctionType>
+    ResultType map_reduce_edges(MapFunctionType mapfunction) {
+      ASSERT_TRUE(finalized);
       rpc.barrier();
       bool global_result_set = false;
       ResultType global_result = ResultType();
@@ -448,7 +449,37 @@ namespace graphlab {
       return wrapper.value;
     }
 
+    template <typename TransformType>
+    void transform_vertices(TransformType transform_functor) {
+      ASSERT_TRUE(finalized);
+      rpc.barrier();
+#ifdef _OPENMP
+      #pragma omp parallel for
+#endif
+      for (int i = 0;i < (int)local_graph.num_vertices(); ++i) {
+        if (lvid2record[i].owner == rpc.procid()) {
+          transform_functor(vertex_type(l_vertex(i)));
+        }
+      }
+      rpc.barrier();
+      synchronize();
+    }
 
+
+    template <typename TransformType>
+    void transform_edges(TransformType transform_functor) {
+      ASSERT_TRUE(finalized);
+      rpc.barrier();
+#ifdef _OPENMP
+      #pragma omp parallel for
+#endif
+      for (int i = 0;i < (int)local_graph.num_vertices(); ++i) {
+        foreach(const local_edge_type& e, l_vertex(i).in_edges()) {
+          transform_functor(edge_type(e));
+        }
+      }
+      rpc.barrier();
+    }
     /**
      * parallel_for_vertices will partition the set of vertices among the
      * vector of accfunctions. Each accfunction is then executed sequentially
@@ -458,8 +489,10 @@ namespace graphlab {
       * vertex_type argument. It may be a functor and contain state.
       * The function need not be reentrant as it is only called sequentially
      */
+    template <typename VertexFunctorType>
     void parallel_for_vertices(
-        std::vector<boost::function<void(vertex_type)> >& accfunction) {
+        std::vector<VertexFunctorType>& accfunction) {
+      ASSERT_TRUE(finalized);
       rpc.barrier();
       int numaccfunctions = (int)accfunction.size();
       ASSERT_GE(numaccfunctions, 1);
@@ -486,8 +519,10 @@ namespace graphlab {
       * edge_type argument. It may be a functor and contain state.
       * The function need not be reentrant as it is only called sequentially
      */
+    template <typename EdgeFunctorType>
     void parallel_for_edges(
-        std::vector<boost::function<void(edge_type)> >& accfunction) {
+        std::vector<EdgeFunctorType>& accfunction) {
+      ASSERT_TRUE(finalized);
       rpc.barrier();
       int numaccfunctions = (int)accfunction.size();
       ASSERT_GE(numaccfunctions, 1);
@@ -780,12 +815,15 @@ namespace graphlab {
 
 
 
-    void save_structure(const std::string& prefix, const std::string& format,
+    void save_format(const std::string& prefix, const std::string& format,
                         bool gzip = true, size_t files_per_machine = 4) {
       if (format == "snap" || format == "tsv") {
         save(prefix, builtin_parsers::tsv_writer<distributed_graph>(),
              gzip, false, true, files_per_machine);
-      } else {
+      } else if (format == "graphjrl") {
+         save(prefix, builtin_parsers::graphjrl_writer<distributed_graph>(),
+             gzip, false, true, files_per_machine);
+      }else {
         logstream(LOG_ERROR)
           << "Unrecognized Format \"" << format << "\"!" << std::endl;
         return;
@@ -800,16 +838,21 @@ namespace graphlab {
        the user defined line parser.
      */
     void load_from_posixfs(const std::string& original_path, line_parser_type line_parser) {
-      // force a "/" at the end of the path
-      // make sure to check that the path is non-empty. (you do not
-      // want to make the empty path "" the root path "/" )
-      std::string path = original_path;
-      if (path.length() > 0 && path[path.length() - 1] != '/') path += "/";
-      std::vector<std::string> graph_files;
-      fs_util::list_files_with_prefix(path, "", graph_files);
-      for(size_t i = 0; i < graph_files.size(); ++i) {
-        graph_files[i] = path + graph_files[i];
+      std::string directory_name; std::string prefix;
+      boost::filesystem::path path(original_path);
+      if (boost::filesystem::is_directory(path)) {
+        // if this is a directory
+        // force a "/" at the end of the path
+        // make sure to check that the path is non-empty. (you do not
+        // want to make the empty path "" the root path "/" )
+        directory_name = path.native();
       }
+      else {
+        directory_name = path.parent_path().native();
+        prefix = path.filename().native();
+      }
+      std::vector<std::string> graph_files;
+      fs_util::list_files_with_prefix(directory_name, prefix, graph_files);
       for(size_t i = 0; i < graph_files.size(); ++i) {
         if (i % rpc.numprocs() == rpc.procid()) {
           std::cout << "Loading graph from file: " << graph_files[i] << std::endl;
@@ -907,7 +950,7 @@ namespace graphlab {
         const size_t out_degree = random::sample(prob) + 1;
         for(size_t i = 0; i < out_degree; ++i) {
           target_index = (target_index + 2654435761)  % nverts;
-          if(source == target_index) {
+          while (source == target_index) {
             target_index = (target_index + 2654435761)  % nverts;
           }
           if(in_degree) add_edge(target_index, source);
@@ -926,7 +969,7 @@ namespace graphlab {
        load a graph with a standard format
        \todo: finish documentation of formats
      */
-    void load_structure(const std::string& path, const std::string& format) {
+    void load_format(const std::string& path, const std::string& format) {
       line_parser_type line_parser;
       if (format == "snap") {
         line_parser = builtin_parsers::snap_parser<distributed_graph>;
@@ -934,6 +977,8 @@ namespace graphlab {
         line_parser = builtin_parsers::adj_parser<distributed_graph>;
       } else if (format == "tsv") {
         line_parser = builtin_parsers::tsv_parser<distributed_graph>;
+      } else if (format == "graphjrl") {
+        line_parser = builtin_parsers::graphjrl_parser<distributed_graph>;
       } else {
         logstream(LOG_ERROR)
           << "Unrecognized Format \"" << format << "\"!" << std::endl;
