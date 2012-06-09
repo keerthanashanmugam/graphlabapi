@@ -36,6 +36,8 @@ int split_time = 1321891200; //time to split test data
 int split_training_time = 1320595199;
 int ratingA = 19349608;
 int ratingB = 15561329;
+int filtered_training = 33589556;
+int filtered_validation = 6162863; 
 int split_day_of_year = 310;
 int level = 2;
 bool debug = false;
@@ -105,7 +107,17 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
     
    vertex_data& vdata = context.vertex_data();
    gzip_in_file fin(vdata.filename, gzip);
-   gzip_in_file fin_example(example_submission, gzip);
+   gzip_out_file fout(vdata.filename + ".out", gzip);
+    gzip_out_file fout_validation(vdata.filename + ".oute", gzip);
+    MM_typecode out_typecode;
+    mm_clear_typecode(&out_typecode);
+    mm_set_integer(&out_typecode); 
+    mm_set_sparse(&out_typecode); 
+    mm_set_matrix(&out_typecode);
+    mm_write_cpp_banner(fout.get_sp(), out_typecode);
+    mm_write_cpp_banner(fout_validation.get_sp(), out_typecode);
+    mm_write_cpp_mtx_crd_size(fout.get_sp(), nodes, nodes, filtered_training);
+    mm_write_cpp_mtx_crd_size(fout_validation.get_sp(), nodes, nodes, filtered_validation);
     
     char linebuf[24000];
     char saveptr[1024];
@@ -115,9 +127,6 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
     int positive_examples = 0, negative_examples = 0;
     int maxdayofyear = 0; 
     int mindayofyear = 10000000;
-    graph_type2 out_graph;
-    out_graph.resize(2*nodes);
-    graph_type2 out_graph_validation;
 
     std::vector<singlerating> multiple_ratings; 
  
@@ -169,7 +178,7 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
       }
 
       total_lines++;
-      singlerating thisrating(from, to, rating, get_day(time));
+      singlerating thisrating(from, to, rating, time);
       if (debug && (total_lines % 50000 == 0))
         logstream(LOG_INFO) << "Parsed line: " << total_lines << " selected lines: " << added << std::endl;
 
@@ -201,8 +210,10 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
             edge_data2 edge(chosen.rating, get_day(chosen.time)-283);
             //if (dayofyear >=  split_day_of_year)
             if (chosen.time > split_training_time)
-              out_graph_validation.add_edge(chosen.user - 1, chosen.item+nodes-1, edge);
-            else out_graph.add_edge(chosen.user - 1, chosen.item+nodes-1, edge);
+              //out_graph_validation.add_edge(chosen.user - 1, chosen.item+nodes-1, edge);
+              fout_validation.get_sp()<<chosen.user -1 << " " << chosen.item+nodes-1 << " " << edge.rating << " " << edge.time << std::endl;
+            else //out_graph.add_edge(chosen.user - 1, chosen.item+nodes-1, edge);
+              fout.get_sp() << chosen.user - 1 << " " << chosen.item+nodes-1 << " " << edge.rating << " " << edge.time << std::endl;
             added++;
             if (chosen.rating == -1)
 	            negative_examples++;
@@ -231,71 +242,15 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
    edge_data2 last_edge(last_rating, dayofyear-283/*last_time*/);
    //if (dayofyear >= split_day_of_year)
    if (last_time > split_training_time)
-      out_graph_validation.add_edge(last_from - 1, last_to+nodes-1, last_edge);
-   else out_graph.add_edge(last_from - 1, last_to+nodes-1, last_edge);
+      //out_graph_validation.add_edge(last_from - 1, last_to+nodes-1, last_edge);
+		  fout_validation.get_sp() << last_from - 1 << " " << last_to+nodes-1 << " " << last_edge.rating << " " << last_edge.time << std::endl;
+   else  //out_graph.add_edge(last_from - 1, last_to+nodes-1, last_edge);
+      fout.get_sp() << last_from -1 << " " << last_to+nodes-1 << " " << last_edge.rating << " " << last_edge.time << std::endl;
    if (last_rating == -1)
 	   negative_examples++;
    else positive_examples++;
 
-    /* handle addition of synthetit time example taken from the test data */
-    int examples_added = 0;
-    bool first = true; 
-    while(true){
-      fin_example.get_sp().getline(linebuf, 24000);
-      if (fin_example.get_sp().eof())
-        break;
-      if (first){ //skip the line: id,clicks
-        first = false;
-        continue;
-      }
-
-      char *pch = strtok_r(linebuf," ,\r\n\t",(char**)&saveptr);
-      if (!pch){
-        logstream(LOG_ERROR) << "Error when parsing example file: " << endl; 
-        return;
-       }
-      int from = atoi(pch);
-      if (from <= 0){
-         logstream(LOG_ERROR) << "Error when parsing file: " << example_submission << " line was: " << linebuf <<endl;
-         return;
-      }
-      pch = strtok_r(NULL," ,\r\n\t",(char**)&saveptr);
-      if (!pch){
-        logstream(LOG_ERROR) << "Error when parsing file: " << vdata.filename << ":" << total_lines << "[" << linebuf << "]" << std::endl;
-        return;
-       }
-      int to = atoi(pch), to2 = 0, to3 = 0;
-      if (to <= 0){
-         logstream(LOG_ERROR) << "Error when parsing file: " << vdata.filename << ":" << total_lines << " document ID is zero or less: " << from << std::endl;
-         return;
-      }
-      pch = strtok_r(NULL," \r\n\t",(char**)&saveptr);
-      if (pch){
-         to2 = atoi(pch);
-         pch = strtok_r(NULL," \r\n\t",(char**)&saveptr);
-         if (pch)
-            to3 = atoi(pch);
-      }
-      edge_data2 edge(1,0/* 131834878*/);
-      add_single_edge(from, to, edge, out_graph, examples_added);
-      if (level >=2 && to2 > 0 ){
-        add_single_edge(from, to2, edge, out_graph, examples_added);
-       if (level>= 3 && to3> 0){
-         add_single_edge(from, to3, edge, out_graph, examples_added);
-       }
-      } 
-
-   }
-   logstream(LOG_ERROR)<<"Added a total of " << examples_added << " from test data" << endl;
-   positive_examples+= examples_added;
-   out_graph.finalize();
-   out_graph_validation.finalize();
-    
-    bipartite_graph_descriptor training_info, validation_info;
-    training_info.rows = training_info.cols = nodes;
-    validation_info.rows = validation_info.cols = nodes;
-    save_matrixmarket_graph(vdata.filename +".out", training_info, out_graph, MATRIX_MARKET_4);
-    logstream(LOG_INFO)<<"Finished exporting a total of " << out_graph.num_edges() << " ratings to training graph " << std::endl << " Positive ratings: " << positive_examples << " Negative ratings: " << negative_examples << std::endl;
+    logstream(LOG_INFO)<<"Finished exporting a total of " << filtered_training<< " ratings to training graph " << std::endl << " Positive ratings: " << positive_examples << " Negative ratings: " << negative_examples << std::endl;
 
   }
 
@@ -318,7 +273,6 @@ int main(int argc,  char *argv[]) {
   clopts.attach_option("debug", &debug, debug, "Display debug output.");
   clopts.attach_option("gzip", &gzip, gzip, "Gzipped input file?");
   clopts.attach_option("split_day_of_year", &split_day_of_year, split_day_of_year, "split training set to validation set, for days >= split_day_of_year");
-  clopts.attach_option("level", &level, level, "take XX examples for each user from test data and add to training. 0 means no examples.");
   // Parse the command line arguments
   if(!clopts.parse(argc, argv)) {
     std::cout << "Invalid arguments!" << std::endl;
