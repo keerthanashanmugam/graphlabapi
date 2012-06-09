@@ -211,9 +211,9 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
             //if (dayofyear >=  split_day_of_year)
             if (chosen.time > split_training_time)
               //out_graph_validation.add_edge(chosen.user - 1, chosen.item+nodes-1, edge);
-              fout_validation.get_sp()<<chosen.user -1 << " " << chosen.item+nodes-1 << " " << edge.rating << " " << edge.time << std::endl;
+              fout_validation.get_sp()<<chosen.user  << " " << chosen.item << " " << edge.rating << " " << edge.time << std::endl;
             else //out_graph.add_edge(chosen.user - 1, chosen.item+nodes-1, edge);
-              fout.get_sp() << chosen.user - 1 << " " << chosen.item+nodes-1 << " " << edge.rating << " " << edge.time << std::endl;
+              fout.get_sp() << chosen.user << " " << chosen.item << " " << edge.rating << " " << edge.time << std::endl;
             added++;
             if (chosen.rating == -1)
 	            negative_examples++;
@@ -243,9 +243,9 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
    //if (dayofyear >= split_day_of_year)
    if (last_time > split_training_time)
       //out_graph_validation.add_edge(last_from - 1, last_to+nodes-1, last_edge);
-		  fout_validation.get_sp() << last_from - 1 << " " << last_to+nodes-1 << " " << last_edge.rating << " " << last_edge.time << std::endl;
+		  fout_validation.get_sp() << last_from  << " " << last_to  << " " << last_edge.rating << " " << last_edge.time << std::endl;
    else  //out_graph.add_edge(last_from - 1, last_to+nodes-1, last_edge);
-      fout.get_sp() << last_from -1 << " " << last_to+nodes-1 << " " << last_edge.rating << " " << last_edge.time << std::endl;
+      fout.get_sp() << last_from << " " << last_to << " " << last_edge.rating << " " << last_edge.time << std::endl;
    if (last_rating == -1)
 	   negative_examples++;
    else positive_examples++;

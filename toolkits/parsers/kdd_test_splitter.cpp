@@ -92,10 +92,9 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
     info.nonzeros = num_edges;
     int num_ratings = vdata.testA ? ratingA : ratingB;
     load_graph(vdata.filename, "matrixmarket", info, _graph, MATRIX_MARKET_4, 
-       true, false, false, true);
-    _graph.finalize();
+       true, true, false, true);
    
-    ASSERT_EQ(_graph.num_edges(), num_edges); 
+    ASSERT_EQ(info.nonzeros, num_edges); 
     MM_typecode matcode;                        
     mm_initialize_typecode(&matcode);
     mm_set_matrix(&matcode);
@@ -104,32 +103,69 @@ typedef graphlab::graph<vertex_data2, edge_data2>::edge_list_type edge_list;
     mm_set_real(&matcode);
     mm_write_banner(pfile, matcode);
     mm_write_mtx_crd_size(pfile, nodes, nodes, num_ratings);
-  
-    int users = 0;
+    char linebuf[24000];
+    char saveptr[1024];
+     
+    gzip_in_file fin(vdata.filename,false); 
     int total_ratings = 0;
-    //go over each user in test data
-    for (int i=0; i< nodes; i++){
-      edge_list edges  = _graph.out_edges(i);
-      if (edges.size() > 0 ){
-        users++;
-        for (uint j=0; j < edges.size(); j++){
-           if ((vdata.testA && _graph.edge_data(edges[j]).weight < split_time) ||
-               (!vdata.testA && _graph.edge_data(edges[j]).weight >= split_time)){
+     int total_lines = 0;
+    while(true){
+      fin.get_sp().getline(linebuf, 24000);
+      if (fin.get_sp().eof())
+        break;
+
+      char *pch = strtok_r(linebuf," \r\n\t",(char**)&saveptr);
+      if (!pch){
+        logstream(LOG_ERROR) << "Error when parsing file: " << vdata.filename << ":" << total_lines << "[" << linebuf << "]" << std::endl;
+        return;
+       }
+      int from = atoi(pch);
+      if (from <= 0){
+         logstream(LOG_ERROR) << "Error when parsing file: " << vdata.filename << ":" << total_lines << " document ID is zero or less: " << from << std::endl;
+         return;
+      }
+      pch = strtok_r(NULL," \r\n\t",(char**)&saveptr);
+      if (!pch){
+        logstream(LOG_ERROR) << "Error when parsing file: " << vdata.filename << ":" << total_lines << "[" << linebuf << "]" << std::endl;
+        return;
+       }
+      int to = atoi(pch);
+      if (to <= 0){
+         logstream(LOG_ERROR) << "Error when parsing file: " << vdata.filename << ":" << total_lines << " document ID is zero or less: " << from << std::endl;
+         return;
+      }
+      pch = strtok_r(NULL," \r\n\t",(char**)&saveptr);
+      if (!pch){
+        logstream(LOG_ERROR) << "Error when parsing file: " << vdata.filename << ":" << total_lines << "[" << linebuf << "]" << std::endl;
+        return;
+       }
+      int rating = atoi(pch);
+      if (rating != 0){
+         logstream(LOG_ERROR) << "Error when parsing file: " << vdata.filename << ":" << total_lines << " invalid rating, not -1 or 1 " << from << std::endl;
+         return;
+      }
+      pch = strtok_r(NULL," \r\n\t",(char**)&saveptr);
+      if (!pch){
+        logstream(LOG_ERROR) << "Error when parsing file: " << vdata.filename << ":" << total_lines << "[" << linebuf << "]" << std::endl;
+        return;
+       }
+      int time = atoi(pch);
+      total_lines++;
+           if ((vdata.testA && time < split_time) ||
+               (!vdata.testA && time >= split_time)){
             total_ratings++;
             fprintf(pfile, "%d %d %d %d\n", 
-                    edges[j].source() + 1, 
-                    edges[j].target() -nodes + 1, -1, 
-                    get_day((int)_graph.edge_data(edges[j]).weight)-283);
+                    from, 
+                    to, -1, 
+                    get_day(time)-283);
             }
         }
      
-      }
-     } //for
      fclose(pfile);
      if (vdata.testA)
         ASSERT_EQ(total_ratings , ratingA);
      else ASSERT_EQ(total_ratings , ratingB);
-    logstream(LOG_INFO)<<"Finished going over " << total_ratings << " rating " << " for " << users << " unique users " << std::endl; 
+    logstream(LOG_INFO)<<"Finished going over " << total_ratings << " rating " << " for 1196411 unique users " << std::endl; 
     logstream(LOG_INFO)<<"Successfully created output file: " << (vdata.testA ? "testA.sorted" : "testB.sorted") << std::endl;
     } //operator()    
 }; //update_functor
