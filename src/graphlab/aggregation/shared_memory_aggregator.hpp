@@ -250,7 +250,7 @@ namespace graphlab {
       graphlab::barrier barrier(threads.size());
       for(size_t i = 0; i < threads.size(); ++i) {
         const boost::function<void (void)> sync_function = 
-          boost::bind(&(isync::run_aggregator), 
+          boost::bind(&isync::run_aggregator, 
                       sync, &engine, &barrier, threads.size(), i);
         threads.launch(sync_function);
       }
