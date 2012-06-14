@@ -519,13 +519,23 @@ namespace graphlab {
      * data-structures to store messages, gather accumulants, and
      * vertex programs and therefore may require considerable memory.
      *
-     * @param [in] dc The distributed control object used to
-     * coordinate multiple synchronous engines.
+     * The number of threads to create are read from 
+     * \ref graphlab_options::get_ncpus "opts.get_ncpus()". 
+     * Valid engine options (graphlab_options::get_engine_args()):
+     * \arg \c use_cache If set to true, partial gathers are cached.
+     * See \ref gather_caching to understand the behavior of the
+     * gather caching model and how it may be used to accelerate program
+     * performance.
+     * \argc \c iterations Limit the number of iterations the engine 
+     * may run.
+     * 
+     * @param [in] dc Distributed controller to associate with
      * @param [in,out] graph A reference to the graph object that this
-     * engine will modify
-     * @param [in] opts The graphlab options object specifying engine
-     * parameters.  This is typically constructed using
-     * \ref graphlab::command_line_options.
+     * engine will modify. The graph must be fully constructed and 
+     * finalized.
+     * @param [in] opts A graphlab::graphlab_options object specifying engine
+     *                  parameters.  This is typically constructed using
+     *                  \ref graphlab::command_line_options.
      */
     synchronous_engine(distributed_control& dc, graph_type& graph,
                        const graphlab_options& opts);
@@ -849,7 +859,8 @@ namespace graphlab {
     rmi(dc, this), graph(graph), 
     threads(opts.get_ncpus()), 
     thread_barrier(opts.get_ncpus()),
-    max_iterations(-1), iteration_counter(0), 
+    max_iterations(-1), iteration_counter(0),
+    timeout(0),
     vprog_exchange(dc), vdata_exchange(dc), 
     gather_exchange(dc), message_exchange(dc),
     aggregator(dc, graph, new context_type(*this, graph)) {
@@ -1051,20 +1062,19 @@ namespace graphlab {
     start_time = timer::approx_time_seconds();
     iteration_counter = 0;
     force_abort = false;
-    execution_status::status_enum termination_reason; 
+    execution_status::status_enum termination_reason = 
+      execution_status::UNSET; 
     // if (perform_init_vtx_program) {
     //   // Initialize all vertex programs
     //   run_synchronous( &synchronous_engine::initialize_vertex_programs );
     // }
-    aggregator.aggregate_all_periodic();
     aggregator.start();
     rmi.barrier();
     // Program Main loop ====================================================      
-    while(iteration_counter < max_iterations && 
-          !force_abort ) {
+    while(iteration_counter < max_iterations && !force_abort ) {
 
       // Check first to see if we are out of time
-      if(timeout < elapsed_seconds()) {
+      if(timeout != 0 && timeout < elapsed_seconds()) {
         termination_reason = execution_status::TIMEOUT;
         break;
       }

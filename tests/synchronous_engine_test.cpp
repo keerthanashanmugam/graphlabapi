@@ -244,11 +244,12 @@ int iteration_counter(count_aggregators::icontext_type& context,
   ASSERT_LT(vertex.data(), 100);
   return vertex.data();
 }
-
+int finalize_iter = 0;
 void iteration_finalize(count_aggregators::icontext_type& context,
                         const int& total) {
   std::cout << "Finalized" << std::endl;
-  ASSERT_EQ(total, context.num_vertices() * context.iteration());
+  ASSERT_EQ(total, context.num_vertices() * (context.iteration()+1));
+  ASSERT_EQ(finalize_iter++, context.iteration());
 }
 
 void test_count_aggregators(graphlab::distributed_control& dc,
@@ -265,6 +266,7 @@ void test_count_aggregators(graphlab::distributed_control& dc,
   std::cout << "Running!" << std::endl;
   engine.start();
   std::cout << "Finished" << std::endl;
+  ASSERT_EQ(finalize_iter, engine.iteration());
 }
 
 

@@ -36,6 +36,8 @@
 #include <graphlab/vertex_program/icontext.hpp>
 #include <graphlab/graph/distributed_graph.hpp>
 #include <graphlab/util/generics/conditional_addition_wrapper.hpp>
+#include <graphlab/util/generics/test_function_or_functor_type.hpp>
+
 #include <graphlab/util/generics/any.hpp>
 #include <graphlab/util/timer.hpp>
 #include <graphlab/util/mutable_queue.hpp>
@@ -104,11 +106,11 @@ namespace graphlab {
       
       /** \brief Performs a map operation on the given vertex adding to the
        *         internal accumulator */
-      virtual void perform_map_vertex(icontext_type&, const vertex_type&) = 0;
+      virtual void perform_map_vertex(icontext_type&, vertex_type&) = 0;
                                       
       /** \brief Performs a map operation on the given edge adding to the
        *         internal accumulator */
-      virtual void perform_map_edge(icontext_type&, const edge_type&) = 0;
+      virtual void perform_map_edge(icontext_type&, edge_type&) = 0;
                                     
       /** \brief Returns true if the accumulation is over vertices. 
                  Returns false if it is over edges.*/
@@ -161,8 +163,8 @@ namespace graphlab {
               typename FinalizerType>
     struct map_reduce_type : public imap_reduce_base {
       conditional_addition_wrapper<ReductionType> acc;
-      const VertexMapperType map_vtx_function;
-      const EdgeMapperType map_edge_function;
+      VertexMapperType map_vtx_function;
+      EdgeMapperType map_edge_function;
       FinalizerType finalize_function;
       
       bool vertex_map;
@@ -174,7 +176,6 @@ namespace graphlab {
       map_reduce_type(VertexMapperType map_vtx_function,
                       FinalizerType finalize_function)
                 : map_vtx_function(map_vtx_function),
-                  map_edge_function(NULL),
                   finalize_function(finalize_function), vertex_map(true) { }
 
       /**
@@ -184,12 +185,11 @@ namespace graphlab {
       map_reduce_type(EdgeMapperType map_edge_function,
                       FinalizerType finalize_function,
                       bool)
-                : map_vtx_function(NULL),
-                map_edge_function(map_edge_function),
+                : map_edge_function(map_edge_function),
                 finalize_function(finalize_function), vertex_map(false) { }
 
 
-      void perform_map_vertex(icontext_type& context, const vertex_type& vertex) {
+      void perform_map_vertex(icontext_type& context, vertex_type& vertex) {
         /** 
          * A compiler error on this line is typically due to the
          * aggregator map function not having the correct type. 
@@ -200,7 +200,7 @@ namespace graphlab {
          *
          * It is also possible the accumulator type 
          */
-        const ReductionType temp = map_vtx_function(context, vertex);
+        ReductionType temp = map_vtx_function(context, vertex);
         /**
          * A compiler error on this line is typically due to the
          * accumulator (ReductionType of the map function not having an
@@ -212,7 +212,7 @@ namespace graphlab {
         acc += temp;
       } // end of perform_map_vertex
       
-      void perform_map_edge(icontext_type& context, const edge_type& edge) {
+      void perform_map_edge(icontext_type& context, edge_type& edge) {
         /** 
          * A compiler error on this line is typically due to the
          * aggregator map function not having the correct type. 
@@ -223,8 +223,7 @@ namespace graphlab {
          *
          * It is also possible the accumulator type 
          */
-        const ReductionType temp = 
-          map_edge_function(context, edge);
+        ReductionType temp = map_edge_function(context, edge);
         /**
          * A compiler error on this line is typically due to the
          * accumulator (ReductionType of the map function not having an
@@ -311,6 +310,74 @@ namespace graphlab {
     mutable_queue<std::string, float> schedule;
     mutex schedule_lock;
     size_t ncpus;
+
+    template <typename ReductionType, typename F>
+    static void test_vertex_mapper_type(std::string key = "") {
+      bool test_result = test_function_or_const_functor_2<F,
+                                             ReductionType(icontext_type&,
+                                                          const vertex_type&),
+                                             ReductionType,
+                                             icontext_type&,
+                                             const vertex_type&>::value;
+      if (!test_result) {
+        std::stringstream strm;
+        strm << "\n";
+        if (key.empty()) {
+          strm << "Vertex Map Function does not pass strict runtime type checks. \n";
+        }
+        else {
+          strm << "Map Function in Vertex Aggregator " << key
+              << " does not pass strict runtime type checks. \n";
+        }
+        if (boost::is_function<typename boost::remove_pointer<F>::type>::value) {
+          strm
+              << "Function prototype should be \n" 
+              << "\t ReductionType f(icontext_type&, const vertex_type&)\n";
+        }
+        else {
+            strm << "Functor's operator() prototype should be \n"
+              << "\t ReductionType operator()(icontext_type&, const vertex_type&) const\n";
+        }
+        strm << "If you are not intentionally violating the abstraction,"
+              << " we recommend fixing your function for safety reasons";
+        strm.flush();
+        logstream(LOG_WARNING) << strm.str() << std::endl;
+      }
+    }
+
+    template <typename ReductionType, typename F>
+    static void test_edge_mapper_type(std::string key = "") {
+      bool test_result = test_function_or_const_functor_2<F,
+                                             ReductionType(icontext_type&,
+                                                          const edge_type&),
+                                             ReductionType,
+                                             icontext_type&,
+                                             const edge_type&>::value;
+
+      if (!test_result) {
+        std::stringstream strm;
+        strm << "\n";
+        if (key.empty()) {
+          strm << "Edge Map Function does not pass strict runtime type checks. \n";
+        }
+        else {
+          strm << "Map Function in Edge Aggregator " << key
+              << " does not pass strict runtime type checks. \n";
+        }
+        if (boost::is_function<typename boost::remove_pointer<F>::type>::value) {
+          strm << "Function prototype should be \n"
+              << "\t ReductionType f(icontext_type&, const edge_type&)\n";
+        }
+        else {
+            strm << "Functor's operator() prototype should be "
+              << "\t ReductionType operator()(icontext_type&, const edge_type&) const\n";
+        }
+        strm << "If you are not intentionally violating the abstraction,"
+            << " we recommend fixing your function for safety reasons";
+        logstream(LOG_WARNING) << strm.str() << std::endl;
+      }
+    }
+    
   public:
 
     
@@ -331,6 +398,12 @@ namespace graphlab {
                                FinalizerType finalize_function) {
       if (key.length() == 0) return false;
       if (aggregators.count(key) == 0) {
+
+        if (rmi.procid() == 0) {
+          // do a runtime type check
+          test_vertex_mapper_type<ReductionType, VertexMapperType>(key);
+        }
+        
         aggregators[key] = new map_reduce_type<ReductionType,
                                                VertexMapperType,
                                                typename default_map_types<ReductionType>::edge_map_type,
@@ -387,6 +460,10 @@ namespace graphlab {
                              FinalizerType finalize_function) {
       if (key.length() == 0) return false;
       if (aggregators.count(key) == 0) {
+        if (rmi.procid() == 0) {
+          // do a runtime type check
+          test_edge_mapper_type<ReductionType, EdgeMapperType>(key);
+        }
         aggregators[key] = new map_reduce_type<ReductionType, 
                                             typename default_map_types<ReductionType>::vertex_map_type,
                                             EdgeMapperType, 
@@ -460,7 +537,7 @@ namespace graphlab {
           for (int i = 0; i < (int)graph.num_local_vertices(); ++i) {
             local_vertex_type lvertex = graph.l_vertex(i);
             if (lvertex.owner() == rmi.procid()) {
-              const vertex_type vertex(lvertex);
+              vertex_type vertex(lvertex);
               localmr->perform_map_vertex(*context, vertex);
             }
           }
@@ -471,7 +548,7 @@ namespace graphlab {
 #endif
           for (int i = 0; i < (int)graph.num_local_vertices(); ++i) {
             foreach(local_edge_type e, graph.l_vertex(i).in_edges()) {
-              const edge_type edge(e);
+              edge_type edge(e);
               localmr->perform_map_edge(*context, edge);
             }
           }
@@ -593,7 +670,7 @@ namespace graphlab {
      * 
      * If an empty is returned, the asynchronous engine
      * must ensure that all threads (ncpus per machine) must eventually
-     * call tick_asynchronous_compute(cpuid, key) where i is the return string.
+     * call tick_asynchronous_compute(cpuid, key) where key is the return string.
      */ 
     std::string tick_asynchronous() {
       // if we fail to acquire the lock, go ahead
@@ -603,7 +680,7 @@ namespace graphlab {
       float curtime = timer::approx_time_seconds() - start_time;
       std::string key;
       bool has_entry = false;
-      if (!schedule.empty() && -schedule.top().second < curtime) {
+      if (!schedule.empty() && -schedule.top().second <= curtime) {
         key = schedule.top().first;
         has_entry = true;
         schedule.pop();
@@ -618,8 +695,8 @@ namespace graphlab {
 
     
     /**
-     * Once tick_asynchronous() returns a key, all in the engine
-     * should call tick_asynchronous_compute with a matching key.
+     * Once tick_asynchronous() returns a key, all threads in the engine
+     * should call tick_asynchronous_compute() with a matching key.
      * This function will perform the computation for the key in question
      * and send the accumulated result back to machine 0 when done
      */
@@ -636,14 +713,14 @@ namespace graphlab {
         for (int i = cpuid;i < (int)graph.num_local_vertices(); i+=ncpus) {
           local_vertex_type lvertex = graph.l_vertex(i);
           if (lvertex.owner() == rmi.procid()) {
-            const vertex_type vertex(lvertex);
+            vertex_type vertex(lvertex);
             localmr->perform_map_vertex(*context, vertex);
           }
         }
       } else {
         for (int i = cpuid;i < (int)graph.num_local_vertices(); i+=ncpus) {
           foreach(local_edge_type e, graph.l_vertex(i).in_edges()) {
-            const edge_type edge(e);
+            edge_type edge(e);
             localmr->perform_map_edge(*context, edge);
           }
         }
@@ -794,7 +871,8 @@ namespace graphlab {
       // note that we do not call approx_time_seconds everytime
       // this ensures that each key will only be run at most once.
       // each time tick_synchronous is called.
-      while(!schedule.empty() && -schedule.top().second < curtime) {
+      std::vector<std::pair<std::string, float> > next_schedule;
+      while(!schedule.empty() && -schedule.top().second <= curtime) {
         std::string key = schedule.top().first;
         aggregate_now(key);
         schedule.pop();
@@ -803,7 +881,11 @@ namespace graphlab {
         float next_time = (timer::approx_time_seconds() + 
                            aggregate_period[key] - start_time);
         rmi.broadcast(next_time, rmi.procid() == 0);
-        schedule.push(key, -next_time);
+        next_schedule.push_back(std::make_pair(key, -next_time));
+      }
+
+      for (size_t i = 0;i < next_schedule.size(); ++i) {
+        schedule.push(next_schedule[i].first, next_schedule[i].second);
       }
     }
 
@@ -858,6 +940,12 @@ namespace graphlab {
     template <typename ResultType, typename MapFunctionType>
     ResultType map_reduce_vertices(MapFunctionType mapfunction) {
       ASSERT_MSG(graph.is_finalized(), "Graph must be finalized");
+
+      if (rmi.procid() == 0) {
+        // do a runtime type check
+        test_vertex_mapper_type<ResultType, MapFunctionType>();
+      }
+      
       rmi.barrier();
       bool global_result_set = false;
       ResultType global_result = ResultType();
@@ -906,6 +994,12 @@ namespace graphlab {
     template <typename ResultType, typename MapFunctionType>
     ResultType map_reduce_edges(MapFunctionType mapfunction) {
       ASSERT_MSG(graph.is_finalized(), "Graph must be finalized");
+      
+      if (rmi.procid() == 0) {
+        // do a runtime type check
+        test_edge_mapper_type<ResultType, MapFunctionType>();
+      }
+      
       rmi.barrier();
       bool global_result_set = false;
       ResultType global_result = ResultType();
