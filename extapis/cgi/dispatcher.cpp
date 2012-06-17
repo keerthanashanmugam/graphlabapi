@@ -119,6 +119,23 @@ edge_dir_type dispatcher::scatter_edges
   
 }
 
+void dispatcher::signal(icontext_type& context,
+                        edge_type& edge,
+                        const jr& result) const {
+  
+  // null means no signal                      
+  const char *cstring = result.signal();
+  if (NULL == cstring) return;
+
+  // either signal source or target
+  if (!strcmp("SOURCE", cstring)){
+    context.signal(edge.source());
+  }else if (!strcmp("TARGET", cstring)){
+    context.signal(edge.target());
+  }else logstream(LOG_FATAL) << "Unrecognized signal: " << cstring << std::endl;
+  
+}
+
 dispatcher::gather_type dispatcher::gather
                              (icontext_type& context,
                               const vertex_type& vertex,
@@ -134,6 +151,9 @@ dispatcher::gather_type dispatcher::gather
   // receive
   jr result;
   p.receive(result);
+  
+  // signal
+  signal(context, edge, result);
   
   // return result
   const char *cstring = result.result();
@@ -178,19 +198,12 @@ void dispatcher::scatter(icontext_type& context,
   invocation.add_edge(edge);
   p.send(invocation);
   
-  // parse results
+  // receive
   jr result;
   p.receive(result);
 
-  // null means no signal
-  const char *cstring = result.signal();
-  if (NULL == cstring) return;
-
-  if (!strcmp("SOURCE", cstring)){
-    context.signal(edge.source());
-  }else if (!strcmp("TARGET", cstring)){
-    context.signal(edge.target());
-  }else logstream(LOG_FATAL) << "Unrecognized signal: " << cstring << std::endl;
+  // signal
+  signal(context, edge, result);
   
 }
  
@@ -291,14 +304,23 @@ void dispatcher::init_vertex(graph_type::vertex_type vertex) {
   
 }
 
+/////////////////////////// HELPERS FOR MAIN METHOD ////////////////////////////
+
+static void ignore_sigpipe(){
+  struct sigaction sa;
+  std::memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = SIG_IGN;
+  CHECK(!::sigaction(SIGPIPE, &sa, NULL));
+}
+
 ////////////////////////////////// MAIN METHOD /////////////////////////////////
 int main(int argc, char** argv) {
 
   global_logger().set_log_level(LOG_DEBUG);
 
   // Initialize control plain using mpi
-  graphlab::mpi_tools::init(argc, argv);
-  graphlab::distributed_control dc;
+  mpi_tools::init(argc, argv);
+  distributed_control dc;
   
   // Parse command line options ------------------------------------------------
   command_line_options clopts("GraphLab Dispatcher");
@@ -335,10 +357,7 @@ int main(int argc, char** argv) {
   }
   
   // Signal handling -----------------------------------------------------------
-  struct sigaction sa;
-  std::memset(&sa, 0, sizeof(sa));
-  sa.sa_handler = SIG_IGN;
-  CHECK(!::sigaction(SIGPIPE, &sa, NULL));
+  ignore_sigpipe();
   
   // Load graph ----------------------------------------------------------------
   logstream(LOG_INFO) << dc.procid() << ": Starting." << std::endl;
@@ -360,15 +379,14 @@ int main(int argc, char** argv) {
   process::add_arg(arg1.str());
   process::add_arg(arg2.str());
   
-  // Schedule vertices
+  // Create engine -------------------------------------------------------------
   logstream(LOG_INFO) << dc.procid() << ": Creating engine" << std::endl;
-  async_consistent_engine<dispatcher> engine(dc, graph, clopts);
-  // TODO: need a way for user to tell us which vertices to schedule
-  logstream(LOG_INFO) << dc.procid() << ": Scheduling all" << std::endl;
+  omni_engine<dispatcher> engine(dc, graph, clopts, "synchronous");
   
   graph.transform_edges(dispatcher::init_edge);
   graph.transform_vertices(dispatcher::init_vertex);
   
+  // Schedule vertices ---------------------------------------------------------
   if (clopts.is_set("signal")){
     std::vector<std::string> ids;
     boost::split(ids, signal, boost::is_any_of(", "), boost::token_compress_on);
@@ -382,11 +400,21 @@ int main(int argc, char** argv) {
   
   // Run the dispatcher --------------------------------------------------------
   engine.start();
+  
+  const float runtime = engine.elapsed_seconds();
+  size_t update_count = engine.num_updates();
+  std::cout << "Finished Running engine in " << runtime 
+            << " seconds." << std::endl
+            << "Total updates: " << update_count << std::endl
+            << "Efficiency: " << (double(update_count) / runtime)
+            << " updates per second "
+            << std::endl;
 
   // Save output ---------------------------------------------------------------
   if(clopts.is_set("saveprefix"))
     graph.save(saveprefix, dispatcher_writer(), false);
   
+  // Teardown communication tools ----------------------------------------------
   mpi_tools::finalize();
   ::kill(-getpid(), SIGTERM);
   return EXIT_SUCCESS;
