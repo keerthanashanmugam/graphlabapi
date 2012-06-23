@@ -1,6 +1,7 @@
 #include <boost/unordered_set.hpp>
 #include <graphlab.hpp>
 #include <graphlab/ui/metrics_server.hpp>
+#include <graphlab/util/cuckoo_set_pow2.hpp>
 #include <graphlab/macros_def.hpp>
 /**
  *  
@@ -49,15 +50,301 @@
  * for small number of entries. A union of a small set which does not rely
  * on malloc, and an unordered_set is probably much more efficient.
  */
+ 
+
+// Radix sort implementation from https://github.com/gorset/radix
+// Thanks to Erik Gorset
+//
+/*
+Copyright 2011 Erik Gorset. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are
+permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of
+conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list
+of conditions and the following disclaimer in the documentation and/or other materials
+provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY Erik Gorset ``AS IS'' AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL Erik Gorset OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+The views and conclusions contained in the software and documentation are those of the
+authors and should not be interpreted as representing official policies, either expressed
+or implied, of Erik Gorset.
+*/
+void radix_sort(graphlab::vertex_id_type *array, int offset, int end, int shift) {
+    int x, y;
+    graphlab::vertex_id_type value, temp;
+    int last[256] = { 0 }, pointer[256];
+
+    for (x=offset; x<end; ++x) {
+        ++last[(array[x] >> shift) & 0xFF];
+    }
+
+    last[0] += offset;
+    pointer[0] = offset;
+    for (x=1; x<256; ++x) {
+        pointer[x] = last[x-1];
+        last[x] += last[x-1];
+    }
+
+    for (x=0; x<256; ++x) {
+        while (pointer[x] != last[x]) {
+            value = array[pointer[x]];
+            y = (value >> shift) & 0xFF;
+            while (x != y) {
+                temp = array[pointer[y]];
+                array[pointer[y]++] = value;
+                value = temp;
+                y = (value >> shift) & 0xFF;
+            }
+            array[pointer[x]++] = value;
+        }
+    }
+
+    if (shift > 0) {
+        shift -= 8;
+        for (x=0; x<256; ++x) {
+            temp = x > 0 ? pointer[x] - pointer[x-1] : pointer[0] - offset;
+            if (temp > 64) {
+                radix_sort(array, pointer[x] - temp, pointer[x], shift);
+            } else if (temp > 1) {
+                std::sort(array + (pointer[x] - temp), array + pointer[x]);
+                //insertion_sort(array, pointer[x] - temp, pointer[x]);
+            }
+        }
+    }
+}
+
+size_t HASH_THRESHOLD = 64;
+
+
+struct vid_vector{
+  std::vector<graphlab::vertex_id_type> vid_vec;
+  graphlab::cuckoo_set_pow2<graphlab::vertex_id_type, 3> *cset;
+  vid_vector(): cset(NULL) { }
+  vid_vector(const vid_vector& v):cset(NULL) {
+    (*this) = v;
+  }
+
+  vid_vector& operator=(const vid_vector& v) {
+    if (this == &v) return *this;
+    vid_vec = v.vid_vec;
+    if (v.cset != NULL) {
+      if (cset == NULL) {
+        cset = new graphlab::cuckoo_set_pow2<graphlab::vertex_id_type, 3>(-1, 0, 2 * v.cset->size());
+      }
+      else {
+        cset->clear();
+      }
+      (*cset) = *(v.cset);
+    }
+    else {
+      if (cset != NULL) {
+        delete cset;
+        cset = NULL;
+      }
+    }
+    return *this;
+  }
+
+  ~vid_vector() {
+    if (cset != NULL) delete cset;
+  }
+
+  void assign(const std::vector<graphlab::vertex_id_type>& vec) {
+    clear();
+    if (vec.size() >= HASH_THRESHOLD) {
+        // move to cset
+        cset = new graphlab::cuckoo_set_pow2<graphlab::vertex_id_type, 3>(-1, 0, 2 * vec.size());
+        foreach (graphlab::vertex_id_type v, vec) {
+          cset->insert(v);
+        }
+    }
+    else {
+      vid_vec = vec;
+      if (vid_vec.size() > 64) {
+        radix_sort(&(vid_vec[0]), 0, vid_vec.size(), 24);
+      }
+      std::sort(vid_vec.begin(), vid_vec.end());
+      std::vector<graphlab::vertex_id_type>::iterator new_end = std::unique(vid_vec.begin(),
+                                               vid_vec.end());
+      vid_vec.erase(new_end, vid_vec.end());
+    }
+  }
+
+  void save(graphlab::oarchive& oarc) const {
+    oarc << (cset != NULL);
+    if (cset == NULL) oarc << vid_vec;
+    else oarc << (*cset);
+  }
+
+
+  void clear() {
+    vid_vec.clear();
+    if (cset != NULL) {
+      delete cset;
+      cset = NULL;
+    }
+  }
+
+  size_t size() const {
+    return cset == NULL ? vid_vec.size() : cset->size();
+  }
+
+  void load(graphlab::iarchive& iarc) {
+    clear();
+    bool hascset;
+    iarc >> hascset;
+    if (!hascset) iarc >> vid_vec;
+    else {
+      cset = new graphlab::cuckoo_set_pow2<graphlab::vertex_id_type, 3>(-1, 0, 2);
+      iarc >> (*cset);
+    }
+  }
+};
+
+
+template <typename T>
+struct counting_inserter {
+  size_t* i;
+  counting_inserter(size_t* i):i(i) { }
+  counting_inserter& operator++() {
+    ++(*i);
+    return *this;
+  }
+  void operator++(int) {
+    ++(*i);
+  }
+
+  struct empty_val {
+    empty_val operator=(const T&) { return empty_val(); }
+  };
+
+  empty_val operator*() {
+    return empty_val();
+  }
+
+  typedef empty_val reference;
+};
+
+
+size_t my_set_intersection(std::vector<graphlab::vertex_id_type>::const_iterator set1begin,
+                           std::vector<graphlab::vertex_id_type>::const_iterator set1end,
+                           std::vector<graphlab::vertex_id_type>::const_iterator set2begin,
+                           std::vector<graphlab::vertex_id_type>::const_iterator set2end) {
+  size_t set1len = std::distance(set1begin, set1end);
+  size_t set2len = std::distance(set2begin, set2end);
+  if (set1len + set2len  < 32) {
+    size_t i = 0;
+    counting_inserter<graphlab::vertex_id_type> iter(&i);
+    std::set_intersection(set1begin, set1end,
+                          set2begin, set2end,
+                          iter);
+    return i;
+  }
+  if (set1len == 0 || set2len == 0) return 0;
+  else if (set1len == 1) {
+    return std::binary_search(set2begin, set2end, *set1begin);
+  }
+  else if (set2len == 1) {
+    return std::binary_search(set1begin, set1end, *set2begin);
+  }
+  else if (set1len < set2len) {
+    size_t ret = 0;
+    size_t shift = set2len / 2;
+    std::vector<graphlab::vertex_id_type>::const_iterator set2center = set2begin + shift;
+    std::vector<graphlab::vertex_id_type>::const_iterator set1center = 
+                                    std::lower_bound(set1begin, set1end, *set2center);
+    ret += my_set_intersection(set1begin, set1center, set2begin, set2center);
+    if (set1center == set1end) return ret;
+    if (*set1center == *set2center) {
+      ++ret; ++set1center; 
+    }
+    ++set2center;
+    ret += my_set_intersection(set1center, set1end, set2center, set2end);
+    return ret;
+  }
+  else {
+    size_t ret = 0;
+    size_t shift = set1len / 2;
+    std::vector<graphlab::vertex_id_type>::const_iterator set1center = set1begin + shift;
+    std::vector<graphlab::vertex_id_type>::const_iterator set2center = 
+                                    std::lower_bound(set2begin, set2end, *set1center);
+    ret += my_set_intersection(set1begin, set1center, set2begin, set2center);
+    if (set2center == set2end) return ret;
+    if (*set1center == *set2center) {
+      ++ret; ++set2center;
+    }
+    ++set1center; 
+    ret += my_set_intersection(set1center, set1end, set2center, set2end);
+    return ret;
+  }
+
+}
+
+
+/*
+ * Computes the size of the intersection of two unordered sets
+ */
+static uint32_t count_set_intersect(
+             const vid_vector& smaller_set,
+             const vid_vector& larger_set) {
+
+  if (smaller_set.cset == NULL && larger_set.cset == NULL) {
+    size_t i = 0;
+    i = my_set_intersection(smaller_set.vid_vec.begin(), smaller_set.vid_vec.end(),
+                          larger_set.vid_vec.begin(), larger_set.vid_vec.end()
+                          );
+    return i;
+  }
+  else if (smaller_set.cset == NULL && larger_set.cset != NULL) {
+    size_t i = 0;
+    foreach(graphlab::vertex_id_type vid, smaller_set.vid_vec) {
+      i += larger_set.cset->count(vid);
+    }
+    return i;
+  }
+  else if (smaller_set.cset != NULL && larger_set.cset == NULL) {
+    size_t i = 0;
+    foreach(graphlab::vertex_id_type vid, larger_set.vid_vec) {
+      i += smaller_set.cset->count(vid);
+    }
+    return i;
+  }
+  else {
+    size_t i = 0;
+    foreach(graphlab::vertex_id_type vid, *(smaller_set.cset)) {
+      i += larger_set.cset->count(vid);
+    }
+    return i;
+
+  }
+}
+
+
+
+
+
 
 /*
  * Each vertex maintains a list of all its neighbors.
  * and a final count for the number of triangles it is involved in
  */
 struct vertex_data_type {
-  vertex_data_type():num_triangles(0),has_large_neighbors(true){ }
+  vertex_data_type(): num_triangles(0),has_large_neighbors(true){ }
   // A list of all its neighbors
-  boost::unordered_set<graphlab::vertex_id_type> vid_set;
+  vid_vector vid_set;
   // The number of triangles this vertex is involved it.
   // only used if "per vertex counting" is used
   uint32_t num_triangles;
@@ -89,7 +376,6 @@ unsigned short CUR_PHASE = 0;
 // if the neighborhood size is <= this number, it will ignore the phase number
 size_t MINIMUM_NBR_SIZE_FOR_PHASE_COLLECTION = 32;
 
-
 /*
  * This is the gathering type which accumulates an array of
  * all neighboring vertices.
@@ -98,20 +384,42 @@ size_t MINIMUM_NBR_SIZE_FOR_PHASE_COLLECTION = 32;
  */
 struct set_union_gather {
   bool large_neighbors;
+  graphlab::vertex_id_type v;
   std::vector<graphlab::vertex_id_type> vid_vec;
 
-  set_union_gather():large_neighbors(false) {
+  set_union_gather():large_neighbors(false),v(-1) {
+  }
+
+  size_t size() const {
+    if (v == (graphlab::vertex_id_type)-1) return vid_vec.size();
+    else return 1;
   }
   /*
    * Combining with another collection of vertices.
    * Union it into the current set.
    */
   set_union_gather& operator+=(const set_union_gather& other) {
+    if (size() == 0) {
+      (*this) = other;
+      return (*this);
+    }
+    else if (other.size() == 0) {
+      return *this;
+    }
+
+    if (vid_vec.size() == 0) {
+      vid_vec.push_back(v);
+      v = (graphlab::vertex_id_type)(-1);
+    }
     if (other.vid_vec.size() > 0) {
-      vid_vec.reserve(vid_vec.size() + other.vid_vec.size());
-      foreach(graphlab::vertex_id_type othervid, other.vid_vec) {
-        vid_vec.push_back(othervid);
+      size_t ct = vid_vec.size();
+      vid_vec.resize(vid_vec.size() + other.vid_vec.size());
+      for (size_t i = 0; i < other.vid_vec.size(); ++i) {
+        vid_vec[ct + i] = other.vid_vec[i];
       }
+    }
+    else if (other.v != (graphlab::vertex_id_type)-1) {
+      vid_vec.push_back(other.v);
     }
     large_neighbors |= other.large_neighbors;
     return *this;
@@ -119,12 +427,19 @@ struct set_union_gather {
   
   // serialize
   void save(graphlab::oarchive& oarc) const {
-    oarc << large_neighbors << vid_vec;
+    oarc << large_neighbors << bool(vid_vec.size() == 0);
+    if (vid_vec.size() == 0) oarc << v;
+    else oarc << vid_vec;
   }
 
   // deserialize
   void load(graphlab::iarchive& iarc) {
-    iarc >> large_neighbors >> vid_vec;
+    bool novvec;
+    v = (graphlab::vertex_id_type)(-1);
+    vid_vec.clear();
+    iarc >> large_neighbors >> novvec;
+    if (novvec) iarc >> v;
+    else iarc >> vid_vec;
   }
 };
 
@@ -133,6 +448,7 @@ struct set_union_gather {
  */
 typedef graphlab::distributed_graph<vertex_data_type,
                                     edge_data_type> graph_type;
+
 
 
 /*
@@ -180,14 +496,14 @@ public:
       if (NUM_PHASES == 1 || 
           cur_is_below_count || otherid % NUM_PHASES == CUR_PHASE) {
         if (PER_VERTEX_COUNT || otherid > vertex.id()) {
-          gather.vid_vec.push_back(otherid);
+          gather.v = otherid;
         } 
       }
     }
     else {
       if (NUM_PHASES == 1 || otherid % NUM_PHASES == CUR_PHASE) {
         if (PER_VERTEX_COUNT || otherid > vertex.id()) {
-          gather.vid_vec.push_back(otherid);
+          gather.v = otherid;
         }
       }
 
@@ -223,10 +539,14 @@ public:
 
     do_not_scatter = false;
     if (gather_performed) {
-      vertex.data().vid_set.clear();
-      // we performed a gather
-      foreach(graphlab::vertex_id_type vid, neighborhood.vid_vec) {
-        vertex.data().vid_set.insert(vid);
+      if (neighborhood.vid_vec.size() == 0) {
+        vertex.data().vid_set.clear();
+        if (neighborhood.v != (graphlab::vertex_id_type(-1))) {
+          vertex.data().vid_set.vid_vec.push_back(neighborhood.v);
+        }
+      }
+      else {
+        vertex.data().vid_set.assign(neighborhood.vid_vec);
       }
       do_not_scatter = vertex.data().vid_set.size() == 0;
     }
@@ -250,20 +570,6 @@ public:
 
 
   /*
-   * Computes the size of the intersection of two unordered sets
-   */
-  static uint32_t count_set_intersect(
-               const boost::unordered_set<vertex_id_type>& smaller_set,
-               const boost::unordered_set<vertex_id_type>& larger_set) {
-    if (smaller_set.size() == 0) return 0;
-    uint32_t count = 0;
-    foreach(vertex_id_type vid, smaller_set) {
-      count += larger_set.count(vid);
-    }
-    return count;
-  }
-
-  /*
    * For each edge, count the intersection of the neighborhood of the
    * adjacent vertices. This is the number of triangles this edge is involved
    * in.
@@ -282,7 +588,7 @@ public:
     if (CUR_PHASE == 0  || cur_is_above_count || nbr_is_above_count) {
       const vertex_data_type& srclist = edge.source().data();
       const vertex_data_type& targetlist = edge.target().data();
-      if (srclist.vid_set.size() >= targetlist.vid_set.size()) {
+      if (targetlist.vid_set.size() < srclist.vid_set.size()) {
         edge.data() += count_set_intersect(targetlist.vid_set, srclist.vid_set);
       }
       else {
@@ -291,8 +597,6 @@ public:
     }
   }
 };
-
-
 
 /*
  * This class is used in a second engine call if per vertex counts are needed.
@@ -323,6 +627,7 @@ public:
    */
   void apply(icontext_type& context, vertex_type& vertex,
              const gather_type& num_triangles) {
+    vertex.data().vid_set.clear();
     vertex.data().num_triangles = num_triangles / 2;
   }
 
@@ -361,8 +666,14 @@ graphlab::empty signal_large_vertices(engine_type::icontext_type& context,
  */
 struct save_triangle_count{
   std::string save_vertex(graph_type::vertex_type v) { 
+    double nt = v.data().num_triangles;
+    double n_followed = v.num_out_edges();
+    double n_following = v.num_in_edges();
+
     return graphlab::tostr(v.id()) + "\t" +
-           graphlab::tostr(v.data().num_triangles) + "\n";
+           graphlab::tostr(nt) + "\t" +
+           graphlab::tostr(n_followed) + "\t" + 
+           graphlab::tostr(n_following) + "\n";
   }
   std::string save_edge(graph_type::edge_type e) {
     return "";
@@ -393,6 +704,9 @@ int main(int argc, char** argv) {
                        &NUM_PHASES, NUM_PHASES,
                        "cuts up the execution to run over multiple."
                        "phases. Useful if memory requirements are high");
+  clopts.attach_option("ht",
+                       &HASH_THRESHOLD, HASH_THRESHOLD,
+                       "Above this size, hash tables are used");
   clopts.attach_option("phase_0_nbr",
                        &MINIMUM_NBR_SIZE_FOR_PHASE_COLLECTION , 
                        MINIMUM_NBR_SIZE_FOR_PHASE_COLLECTION,
@@ -406,7 +720,6 @@ int main(int argc, char** argv) {
                        "save to file with prefix \"[per_vertex]\". "
                        "The algorithm used is slightly different "
                        "and thus will be a little slower");
-  
   if(!clopts.parse(argc, argv)) return EXIT_FAILURE;
   if (prefix == "") {
     std::cout << "--graph is not optional\n";
