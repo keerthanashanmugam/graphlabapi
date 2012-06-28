@@ -1,0 +1,637 @@
+project(GraphLab)
+
+# We require the most recent version of cmake and automatically
+# install the correct version when using the cmake lists
+cmake_minimum_required(VERSION 2.8)
+
+# Libraries linked via full path no longer produce linker search paths.
+cmake_policy(SET CMP0003 NEW)
+# Preprocessor definition values are now escaped automatically.
+cmake_policy(SET CMP0005 NEW)
+
+# Determine where additional GraphLab specific cmake modules are
+# defined
+set(CMAKE_MODULE_PATH ${GraphLab_SOURCE_DIR}/cmake)
+
+# TODO: what is this used by
+set(BUILD_SHARED_LIBS ON)
+
+include(CheckLibraryExists) 
+include(CheckFunctionExists) 
+include(ExternalProject)
+include(CheckCXXSourceCompiles)
+# # Display information about cmake variables
+# include(CMakePrintSystemInformation)
+
+# set include path
+include_directories(
+  ${GraphLab_SOURCE_DIR}/src
+  ${GraphLab_SOURCE_DIR}/cxxtest
+  ${GraphLab_SOURCE_DIR}/deps/local/include)
+
+# set link path
+link_directories(${GraphLab_SOURCE_DIR}/deps/local/lib)
+
+
+if(NO_OPENMP)
+  set(OPENMP_C_FLAGS "")
+  set(OPENMP_LIBRARIES "")
+  add_definitions(-D__NO_OPENMP__)
+else()
+  set(OPENMP_C_FLAGS "-fopenmp")
+  set(OPENMP_LIBRARIES "gomp")
+endif()
+
+
+link_libraries(pthread ${OPENMP_LIBRARIES})
+
+# Shared compiler flags used by all builds (debug, profile, release)
+set(COMPILER_FLAGS "-Wall -g ${OPENMP_C_FLAGS}" CACHE STRING "common compiler options")
+
+# Disable address space randomization for OSX lion and above
+if (APPLE)
+  set(CMAKE_EXE_LINKER_FLAGS "${CNAME_EXE_LINKER_FLAGS} -Xlinker -no_pie")
+endif()
+
+# Set subdirectories
+subdirs(src tests demoapps toolkits extapis)
+if(EXPERIMENTAL)
+  subdirs(experimental)
+endif()
+if (IS_DIRECTORY ${GraphLab_SOURCE_DIR}/apps)
+  subdirs(apps)
+endif()
+
+
+# Set installation rules
+install(DIRECTORY src/  
+  DESTINATION include
+  FILES_MATCHING PATTERN "*.hpp"  PATTERN "*.h" 
+  PATTERN ".svn" EXCLUDE
+  )
+install(CODE "execute_process(COMMAND ./scripts/install_deps.sh
+  ${CMAKE_INSTALL_PREFIX} WORKING_DIRECTORY
+  ${CMAKE_CURRENT_SOURCE_DIR})")
+
+# set(EXTERNAL_PROJECT_FLAGS 
+#   "-I${GraphLab_SOURCE_DIR}/deps/local/include -L${GraphLab_SOURCE_DIR}/deps/local/lib")
+
+
+
+### ===================================================================
+# ## Download News update
+# if(NOT DISABLE_NEWS)
+#   message(STATUS
+#     "\n"
+#     "===============================================================\n"
+#     "Downloading the news from graphlab.org: ")
+#   file(DOWNLOAD "http://graphlab.org/news.txt" 
+#     ${GraphLab_SOURCE_DIR}/new_news.txt
+#     TIMEOUT 3  
+#     STATUS download_status)
+#   # Track usage v2 news url
+#   file(DOWNLOAD "http://c.statcounter.com/7396904/0/a1b29b21/1/"
+#     ${GraphLab_SOURCE_DIR}/temporary_download_counter.tmp
+#     TIMEOUT 3
+#     STATUS dlstatus) 
+#   file(REMOVE ${GraphLab_SOURCE_DIR}/temporary_download_counter.tmp)
+#   file(READ ${GraphLab_SOURCE_DIR}/new_news.txt news_update)
+#   message(STATUS
+#     "Finished.\n"
+#     ${news_update}
+#     "\n"
+#     "===============================================================")
+# endif()
+
+
+
+
+
+
+## ============================================================================
+## ============================================================================
+## ============================================================================
+# Build external dependencies
+
+# Build eigen =================================================================
+# TODO: Move to toolkits.
+# While eigen is not used in the core GraphLab library we found it
+# useful to have a matrix library. For now we download eigen from
+# our servers since the eigen servers use SSL which is not supported
+# by cmake DOWNLOAD_COMMAND hg clone
+# https://bitbucket.org/eigen/eigen/
+ExternalProject_Add(eigen
+  PREFIX ${GraphLab_SOURCE_DIR}/deps/eigen
+  URL http://graphlab.org/deps/eigen_3.0.5.tar.gz
+  URL_MD5 73f47ddc6a2b540356864bfc8a34f5d7
+  CONFIGURE_COMMAND ""
+  BUILD_COMMAND ""
+  BUILD_IN_SOURCE 1  
+  INSTALL_COMMAND cp -r Eigen unsupported <INSTALL_DIR>/.
+  INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local/include)
+add_definitions(-DHAS_EIGEN)
+
+
+macro(requires_eigen NAME)
+  add_dependencies(${NAME} eigen)
+endmacro(requires_eigen)
+
+
+# libbz  =================================================================
+ExternalProject_Add(libbz2
+  PREFIX ${GraphLab_SOURCE_DIR}/deps/libbz2
+  URL http://www.bzip.org/1.0.6/bzip2-1.0.6.tar.gz
+  URL_MD5 00b516f4704d4a7cb50a1d97e6e8e15b
+  INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local
+  CONFIGURE_COMMAND ""
+  PATCH_COMMAND patch -p0 < ${GraphLab_SOURCE_DIR}/patches/libbz2_fpic.patch
+  BUILD_IN_SOURCE 1
+  BUILD_COMMAND make install PREFIX=<INSTALL_DIR>
+  INSTALL_COMMAND "" )
+
+
+
+
+# Build Boost =================================================================
+# GraphLab relies heavily on the boost library for parsing program
+# options, filesystem support, random number generation, and 
+# unordered containers. 
+ExternalProject_Add(boost
+  PREFIX ${GraphLab_SOURCE_DIR}/deps/boost
+  URL "http://sourceforge.net/projects/boost/files/boost/1.49.0/boost_1_49_0.tar.gz"
+  URL_MD5 e0defc8c818e4f1c5bbb29d0292b76ca 
+  BUILD_IN_SOURCE 1
+  CONFIGURE_COMMAND 
+  ./bootstrap.sh 
+  --with-libraries=filesystem
+  --with-libraries=program_options
+  --with-libraries=system
+  --with-libraries=iostreams
+  --with-libraries=date_time
+  --with-libraries=random
+  --prefix=<INSTALL_DIR>
+  BUILD_COMMAND  
+  C_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+  CPLUS_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+  LIBRARY_PATH=${GraphLab_SOURCE_DIR}/deps/local/lib
+  ./b2 install --link=static --variant=release --threading=multi --runtime-link=static
+  INSTALL_COMMAND ""
+  INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local )
+set(BOOST_ROOT ${GraphLab_SOURCE_DIR}/deps/local )
+set(BOOST_LIBS_DIR ${GraphLab_SOURCE_DIR}/deps/local/lib)
+set(Boost_LIBRARIES 
+  ${BOOST_LIBS_DIR}/libboost_filesystem.a 
+  ${BOOST_LIBS_DIR}/libboost_program_options.a
+  ${BOOST_LIBS_DIR}/libboost_system.a 
+  ${BOOST_LIBS_DIR}/libboost_iostreams.a 
+  ${BOOST_LIBS_DIR}/libboost_date_time.a)
+add_dependencies(boost libbz2)
+message(STATUS "Boost libs: " ${Boost_LIBRARIES})
+# add_definitions(-DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG)
+# add_definitions(-DBOOST_ALL_DYN_LINK)
+# set(Boost_SHARED_LIBRARIES "")
+foreach(blib ${Boost_LIBRARIES})
+  message(STATUS "Boost libs: " ${blib})
+  string(REGEX REPLACE "\\.a$" ${CMAKE_SHARED_LIBRARY_SUFFIX} bout ${blib})
+  message(STATUS "Boost dyn libs: " ${bout})
+  set(Boost_SHARED_LIBRARIES ${Boost_SHARED_LIBRARIES} ${bout})
+endforeach()
+message(STATUS "Boost Shared libs: " ${Boost_SHARED_LIBRARIES})
+
+
+# TCMalloc  ===================================================================
+# We use tcmalloc for improved memory allocation performance
+ExternalProject_Add(libtcmalloc
+  PREFIX ${GraphLab_SOURCE_DIR}/deps/tcmalloc
+  URL http://gperftools.googlecode.com/files/gperftools-2.0.tar.gz
+  URL_MD5 13f6e8961bc6a26749783137995786b6
+  CONFIGURE_COMMAND <SOURCE_DIR>/configure --enable-frame-pointers --prefix=<INSTALL_DIR>
+  INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local)
+# link_libraries(tcmalloc)
+set(TCMALLOC-FOUND 1)
+add_definitions(-DHAS_TCMALLOC)
+
+
+
+# Lib Jpeg =================================================================
+ExternalProject_Add(libjpeg
+  PREFIX ${GraphLab_SOURCE_DIR}/deps/libjpeg
+  URL http://www.ijg.org/files/jpegsrc.v8d.tar.gz
+  INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local
+  CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR>
+  BUILD_IN_SOURCE 1)
+
+
+
+# ImageMagick =================================================================
+# # set(imagemagick_configure_cmd
+# #   bash -c "C_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include CPLUS_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include LIBRARY_PATH=${GraphLab_SOURCE_DIR}/deps/local/lib LDFLAGS='-L${GraphLab_SOURCE_DIR}/deps/local/lib' ./configure  --prefix=${GraphLab_SOURCE_DIR}/deps/local --without-threads --disable-openmp --disable-opencl")
+# # ExternalProject_Add(imagemagick
+# #   PREFIX ${GraphLab_SOURCE_DIR}/deps/imagemagick
+# #   URL http://www.imagemagick.org/download/ImageMagick.tar.gz
+# #   # URL_MD5 010b63a2542c4ec4918c8cb431c00356
+# #   BUILD_IN_SOURCE 1 
+# #   CONFIGURE_COMMAND ${imagemagick_configure_cmd}
+# #   BUILD_COMMAND
+# #   C_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+# #   CPLUS_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+# #   LIBRARY_PATH=${GraphLab_SOURCE_DIR}/deps/local/lib
+# # #  LDFLAGS=-L${GraphLab_SOURCE_DIR}/deps/local/lib	
+# #   make
+# #   INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local)
+ExternalProject_Add(imagemagick
+  PREFIX ${GraphLab_SOURCE_DIR}/deps/imagemagick
+  URL http://www.imagemagick.org/download/ImageMagick.tar.gz
+  # URL_MD5 010b63a2542c4ec4918c8cb431c00356
+  CONFIGURE_COMMAND 
+  C_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+  CPLUS_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+  LIBRARY_PATH=${GraphLab_SOURCE_DIR}/deps/local/lib
+  LDFLAGS=-L${GraphLab_SOURCE_DIR}/deps/local/lib       
+  <SOURCE_DIR>/configure 
+  --prefix=<INSTALL_DIR>
+  --without-threads
+  --disable-openmp
+  --disable-opencl
+  BUILD_COMMAND
+  C_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+  CPLUS_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+  LIBRARY_PATH=${GraphLab_SOURCE_DIR}/deps/local/lib
+  LDFLAGS=-L${GraphLab_SOURCE_DIR}/deps/local/lib       
+  make
+  INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local)
+include_directories(${GraphLab_SOURCE_DIR}/deps/local/include/ImageMagick)
+add_dependencies(imagemagick libjpeg)
+
+macro(requires_imagemagick NAME)
+  target_link_libraries(${NAME} Magick++ jpeg)
+  add_dependencies(${NAME} imagemagick libjpeg)
+endmacro(requires_imagemagick)
+
+# OpenCV =================================================================
+ExternalProject_Add(opencv
+  PREFIX ${GraphLab_SOURCE_DIR}/deps/opencv
+  URL http://superb-sea2.dl.sourceforge.net/project/opencvlibrary/opencv-unix/2.4.0/OpenCV-2.4.0.tar.bz2
+  # URL_MD5 010b63a2542c4ec4918c8cb431c00356
+#  CONFIGURE_COMMAND
+  CMAKE_COMMAND ${CMAKE_COMMAND} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+  -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_PACKAGE=OFF -DBUILD_EXAMPLES=OFF -DOPENCV_BUILD_3RDPARTY_LIBS=ON -DBUILD_SHARED_LIBRARIES=OFF
+  C_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+  CPLUS_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+  LIBRARY_PATH=${GraphLab_SOURCE_DIR}/deps/local/lib
+  LDFLAGS=-L${GraphLab_SOURCE_DIR}/deps/local/lib
+  BUILD_COMMAND
+  C_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+  CPLUS_INCLUDE_PATH=${GraphLab_SOURCE_DIR}/deps/local/include 
+  LIBRARY_PATH=${GraphLab_SOURCE_DIR}/deps/local/lib
+  LDFLAGS=-L${GraphLab_SOURCE_DIR}/deps/local/lib
+  make 
+  INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local)
+include_directories(${GraphLab_SOURCE_DIR}/deps/local/include/opencv)
+add_dependencies(opencv libjpeg)
+
+macro(requires_opencv NAME)
+  target_link_libraries(${NAME} opencv_core opencv_imgproc opencv_calib3d opencv_video opencv_features2d opencv_ml opencv_highgui opencv_objdetect opencv_contrib opencv_legacy opencv_contrib opencv_stitching)
+  add_dependencies(${NAME} opencv)
+endmacro(requires_opencv)
+
+# zlib  =======================================================================
+# We rely on the zlib library to read gzip compressed files
+# (using boost iostreams).
+check_library_exists(z zlibVersion "" ZLIB_FOUND)
+if (ZLIB_FOUND)
+  add_definitions(-DHAS_ZLIB)
+  link_libraries(z)
+endif()
+
+# libevent ====================================================================
+# LibEvent is used in the RPC layer to manage the interaction between the 
+# TCP stack and the event handler threads
+ExternalProject_Add(libevent
+  PREFIX ${GraphLab_SOURCE_DIR}/deps/event
+  URL http://iweb.dl.sourceforge.net/project/levent/libevent/libevent-2.0/libevent-2.0.18-stable.tar.gz
+  URL_MD5 aa1ce9bc0dee7b8084f6855765f2c86a
+  CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR>
+  INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local)
+#link_libraries(event)
+#link_libraries(event_pthreads)
+
+ExternalProject_Add(libjson
+  PREFIX ${GraphLab_SOURCE_DIR}/deps/json
+  URL http://voxel.dl.sourceforge.net/project/libjson/libjson_7.6.0.zip
+  URL_MD5 dcb326038bd9b710b8f717580c647833
+  BUILD_IN_SOURCE 1
+  CONFIGURE_COMMAND ""
+  PATCH_COMMAND patch -p0 makefile < ${GraphLab_SOURCE_DIR}/patches/libjson.patch
+  BUILD_COMMAND make
+  INSTALL_COMMAND prefix=<INSTALL_DIR> make install 
+  INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local
+  )
+
+
+# JNI =========================================================================
+# We use JNI for jvm interfacing and for hdfs support.  We currently only 
+# detect the presence of java and do not install our own version. 
+find_package(Java)
+find_package(JNI)
+
+if(NOT NO_JAVAC)
+  if((EXISTS ${JAVA_INCLUDE_PATH}/jni.h))
+    set(JNI_REALLY_FOUND 1 CACHE BOOL "Tests whether the header actually exists")
+    message(STATUS "jni.h was found at " ${JAVA_INCLUDE_PATH}/jni.h)
+    include_directories(${JNI_INCLUDE_DIRS})
+    ## Guess java home location   
+    if(EXISTS $ENV{JAVA_HOME} )
+      set(JAVA_HOME $ENV{JAVA_HOME} CACHE STRING "Location of Java Home")
+      message(STATUS "Java home set by user: " ${JAVA_HOME})
+    else()
+      string(REGEX REPLACE "\\/include" "" JAVA_HOME_GUESS  ${JAVA_AWT_INCLUDE_PATH})
+      set(JAVA_HOME ${JAVA_HOME_GUESS} CACHE STRING "Location of Java Home")
+      message(STATUS "Java Home guessed: " ${JAVA_HOME})
+    endif()
+  else( )
+    set(JNI_REALLY_FOUND 0 CACHE BOOL "Tests whether the header actually exists")
+    message(STATUS "jni.h was not found at " ${JAVA_INCLUDE_PATH}/jni.h)
+  endif( )
+endif()
+
+# Ant =========================================================================
+# Ant is used to build the graphlab JVM interface
+find_package(Ant)
+
+# LibHDFS =====================================================================
+# If JNI is found we install libhdfs which allows programs to read and write
+# to hdfs filesystems
+if( JNI_REALLY_FOUND )
+  message(STATUS "Building libhdfs")
+  ExternalProject_Add(hadoop
+    PREFIX ${GraphLab_SOURCE_DIR}/deps/hadoop
+    URL http://www.gtlib.gatech.edu/pub/apache/hadoop/common/hadoop-1.0.1/hadoop-1.0.1.tar.gz
+    URL_MD5 e627d9b688c4de03cba8313bd0bba148
+    UPDATE_COMMAND chmod +x <SOURCE_DIR>/src/c++/libhdfs/install-sh <SOURCE_DIR>/src/c++/libhdfs/configure
+    PATCH_COMMAND patch -p1 < ${GraphLab_SOURCE_DIR}/patches/libhdfs-compile-osx.patch
+    BUILD_IN_SOURCE 1
+    CONFIGURE_COMMAND <SOURCE_DIR>/src/c++/libhdfs/configure JVM_ARCH=tune=i686 --prefix=<INSTALL_DIR> --with-java=${JAVA_HOME}
+    INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local
+    TEST_COMMAND bash -c "mkdir -p <INSTALL_DIR>/include && cp <SOURCE_DIR>/src/c++/libhdfs/hdfs.h <INSTALL_DIR>/include")
+  set(HADOOP_FOUND 1 CACHE BOOL "Hadoop was found")
+  add_definitions(-DHAS_HADOOP)
+  # link_libraries(hdfs ${JAVA_JVM_LIBRARY})
+endif( JNI_REALLY_FOUND )
+
+# MPI =========================================================================
+# MPI is currently used to establish communication between rpc nodes
+find_package(MPICH2)
+if(MPI_FOUND)
+  message(STATUS "MPI Found: " ${MPI_LIBRARY} ${MPI_EXTRA_LIBRARY})
+  add_definitions(-DHAS_MPI)
+  include_directories(${MPI_INCLUDE_PATH})
+else(MPI_FOUND)
+  message(STATUS "MPI Not Found! Distributed Executables will not be compiled")
+  set(MPI_LIBRARY "")
+  set(MPI_EXTRA_LIBRARY "")
+  # ExternalProject_Add(openmpi
+  #   PREFIX ${GraphLab_SOURCE_DIR}/deps/openmpi
+  #   URL http://www.open-mpi.org/software/ompi/v1.4/downloads/openmpi-1.4.5.tar.gz
+  #   CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR>
+  #   INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local)
+endif(MPI_FOUND)
+
+
+
+
+
+## =============================================================
+# Core graphlab requirements 
+macro(requires_core_deps NAME)
+  target_link_libraries(${NAME} 
+    ${Boost_LIBRARIES}
+    tcmalloc
+    event event_pthreads)
+  add_dependencies(${NAME} boost libtcmalloc libevent libjson)
+  if(MPI_FOUND)
+    target_link_libraries(${NAME} ${MPI_LIBRARY} ${MPI_EXTRA_LIBRARY})
+  endif(MPI_FOUND)
+  if(HADOOP_FOUND)
+    target_link_libraries(${NAME} hdfs ${JAVA_JVM_LIBRARY})
+    add_dependencies(${NAME} hadoop)
+  endif(HADOOP_FOUND)
+endmacro(requires_core_deps)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## ============================================================================
+## ============================================================================
+## ============================================================================
+# System Checks
+
+## ============================================================================
+# Test for cpu affinity support
+set(CMAKE_REQUIRED_LIBRARIES "pthread")
+check_function_exists(pthread_setaffinity_np HAS_SET_AFFINITY) 
+set(CMAKE_REQUIRED_LIBRARIES ${crlbackup})  
+
+## ============================================================================
+# architecture detection. check 64 bit
+# TODO: do we need this or is there a cleaner way to do this in CMake
+if(CMAKE_SIZEOF_VOID_P MATCHES 4)
+  set( HAVE_64_BIT 0 )
+else(CMAKE_SIZEOF_VOID_P MATCHES 4)
+  set( HAVE_64_BIT 1 )
+endif(CMAKE_SIZEOF_VOID_P MATCHES 4)
+if (HAVE_64_BIT MATCHES 1)
+  set(MARCH "x86-64")
+else()
+  set(MARCH "i686")
+endif()
+
+
+
+
+
+
+
+
+## ============================================================================
+## ============================================================================
+## ============================================================================
+# Setup compiler
+
+# If profiling mode is enabled then additional profiling flags are set for
+# the compiler
+if (COMPILE_PROFILING MATCHES 1) 
+  set(PROFILING_FLAGS "-DUSE_EVENT_LOG -DUSE_TRACEPOINT")
+else()
+  set(PROFILING_FLAGS "")
+endif()
+
+
+# Set the debug flags
+set(CMAKE_C_FLAGS_DEBUG 
+  "-O0 -march=${MARCH} -Winit-self ${PROFILING_FLAGS} ${COMPILER_FLAGS}"
+  CACHE STRING "compiler options" FORCE) 
+set(CMAKE_CXX_FLAGS_DEBUG 
+  "-O0 -march=${MARCH} -Winit-self ${PROFILING_FLAGS} ${COMPILER_FLAGS}"
+  CACHE STRING "compiler options" FORCE) 
+
+set(CMAKE_C_FLAGS_RELEASE 
+  "-O3 -march=${MARCH} -mtune=native ${PROFILING_FLAGS} ${COMPILER_FLAGS}"
+  CACHE STRING "compiler options" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE 
+  "-O3 -march=${MARCH} -mtune=native ${PROFILING_FLAGS} ${COMPILER_FLAGS}"
+  CACHE STRING "compiler options" FORCE)
+
+
+# # Mex setup
+# set(CMAKE_CXX_FLAGS_MEX  
+#   "${CMAKE_CXX_FLAGS_RELEASE} -D_GNU_SOURCE -fPIC -fno-omit-frame-pointer -pthread ")
+# set(CMAKE_C_FLAGS_MEX  
+#   "${CMAKE_C_FLAGS_RELEASE}   -D_GNU_SOURCE  -fexceptions -fPIC -fno-omit-frame-pointer -pthread ")
+
+
+if (CMAKE_BUILD_TYPE MATCHES "Release")
+  message(STATUS "Release build with C++ flags: " ${CMAKE_CXX_FLAGS_RELEASE})
+  message(STATUS "Release build with C flags: " ${CMAKE_C_FLAGS_RELEASE})
+elseif(CMAKE_BUILD_TYPE MATCHES "Debug")
+  message(STATUS "Debug build with C++ flags: " ${CMAKE_CXX_FLAGS_DEBUG})
+  message(STATUS "Debug build with C flags: " ${CMAKE_C_FLAGS_DEBUG})     
+elseif(CMAKE_BUILD_TYPE MATCHES "Mex")
+  message(STATUS "Mex CXX" ${CMAKE_CXX_FLAGS_MEX})
+  message(STATUS "Mex C" ${CMAKE_C_FLAGS_MEX})
+else()
+  message(WARNING "Unknown build type: " ${CMAKE_BUILD_TYPE} "!")
+endif()
+
+
+
+
+
+
+
+## ============================================================================
+## ============================================================================
+## ============================================================================
+# Setup testing tools
+# Make sure testing is enabled
+enable_testing()
+# Use Python interpreter
+find_package(PythonInterp)
+set(CXXTESTGEN ${CMAKE_SOURCE_DIR}/cxxtest/cxxtestgen)
+# create a macro to define a test
+macro(ADD_CXXTEST NAME)
+  if(PYTHONINTERP_FOUND)
+    add_custom_command(
+      OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${NAME}.cpp
+      COMMAND
+      ${PYTHON_EXECUTABLE} ${CXXTESTGEN}
+      --runner=ErrorPrinter
+      -o ${CMAKE_CURRENT_BINARY_DIR}/${NAME}.cpp ${ARGV}
+      DEPENDS ${ARGV}
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      )
+  endif(PYTHONINTERP_FOUND)
+  add_graphlab_executable(${NAME}test ${CMAKE_CURRENT_BINARY_DIR}/${NAME}.cpp)
+  set_source_files_properties( ${CMAKE_CURRENT_BINARY_DIR}/${NAME}.cpp
+    PROPERTIES COMPILE_FLAGS "-I${CMAKE_CURRENT_SOURCE_DIR}" )
+
+  add_test(${NAME} ${NAME}test)
+endmacro(ADD_CXXTEST)
+
+
+# macro(ADD_CPPTEST NAME)
+#   add_graphlab_executable(${NAME}test ${NAME})
+#   set_source_files_properties(${NAME}
+#     PROPERTIES COMPILE_FLAGS "-I${CMAKE_CURRENT_SOURCE_DIR}" )
+#   add_test(${NAME} ${NAME}test)
+# endmacro(ADD_CPPTEST)
+
+
+
+
+
+
+## ============================================================================
+## ============================================================================
+## ============================================================================
+# Build Macros
+
+# copy_file ===================================================================
+# copy a single file into build environment
+macro(copy_file NAME)
+  message(STATUS "Copying File: " ${NAME})
+  file(INSTALL ${CMAKE_CURRENT_SOURCE_DIR}/${NAME} 
+    DESTINATION   ${CMAKE_CURRENT_BINARY_DIR} )
+endmacro(copy_file NAME)
+
+# copy_files ==================================================================
+# copy all files matching a pattern into the build environment
+macro(copy_files NAME)
+  message(STATUS "Copying Files: " ${NAME})
+  file(INSTALL ${CMAKE_CURRENT_SOURCE_DIR}/  
+    DESTINATION  ${CMAKE_CURRENT_BINARY_DIR} 
+    FILES_MATCHING PATTERN ${NAME} )
+endmacro(copy_files NAME)
+
+
+# macro(EXEC file prog)
+#   add_custom_command(
+#     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${file}
+#     COMMAND
+#     ${prog}
+#     DEPENDS ${prog}
+#     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+#     )
+# endmacro(EXEC)
+
+# add_graphlab_executable =====================================================
+# copy all files matching a pattern into the build environment
+macro(add_graphlab_executable NAME)
+  add_executable(${NAME} ${ARGN})
+  target_link_libraries(${NAME} graphlab)
+  add_dependencies(${NAME} graphlab)
+  requires_core_deps(${NAME})
+endmacro(add_graphlab_executable)
+
+
+
+# add_jni_library =============================================================
+# If jni was found then create a jni library.  Otherwise generate a warning
+macro(add_jni_library NAME)
+  # Only build if JNI was found
+  if (JNI_REALLY_FOUND)
+    include_directories(
+      ${JAVA_INCLUDE_PATH}
+      ${JAVA_INCLUDE_PATH}/linux
+      )
+    message(STATUS "Detected JNI library " ${NAME}) 
+    add_library(${NAME} SHARED ${ARGN})
+    target_link_libraries(${NAME}  graphlab_pic) 
+    target_link_libraries(${NAME} ${Boost_SHARED_LIBRARIES})
+    # IF (APPLE)
+    #         SET(CMAKE_SHARED_MODULE_CREATE_CXX_FLAGS "-dynamiclib -m64 ")
+    #         SET_TARGET_PROPERTIES(${NAME} PROPERTIES SUFFIX .jnilib)
+    # ENDIF (APPLE)
+  elseif ()
+    message(STATUS "Not building " ${NAME} " because JNI was not found")
+  endif ()
+endmacro(add_jni_library)
+
+
+
+
+
+
+
