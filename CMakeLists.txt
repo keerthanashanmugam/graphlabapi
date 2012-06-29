@@ -229,12 +229,12 @@ ExternalProject_Add(libv8
   GIT_REPOSITORY git://github.com/v8/v8.git
   BUILD_IN_SOURCE 1
   INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local
-  CONFIGURE_COMMAND ""
-  BUILD_COMMAND make dependencies && make native library=shared
-  INSTALL_COMMAND
-  sh -c "install <SOURCE_DIR>/include/* <INSTALL_DIR>/include/v8")
-include_directories(${GraphLab_SOURCE_DIR}/deps/local/include/v8)
-link_directories(${GraphLab_SOURCE_DIR}/deps/libv8/src/libv8/out/native)
+  CONFIGURE_COMMAND make dependencies
+  UPDATE_COMMAND "" # Disable updates
+  BUILD_COMMAND make native 
+  INSTALL_COMMAND sh -c 
+  "cp -r <SOURCE_DIR>/include <INSTALL_DIR>/include/v8 & cp <SOURCE_DIR>/out/native/*.a <INSTALL_DIR>/lib" )
+
 # This is ugly, but the distro doesn't come with a `make install` and CMAKE wouldn't
 # let me use wildcards. Whoever has a better idea how to do this please tell me.
 
@@ -249,7 +249,9 @@ ExternalProject_Add(cvv8
   rsync -acC <SOURCE_DIR>/include/cvv8/ <INSTALL_DIR>/include/cvv8)
 
 macro(requires_v8 NAME)
-  target_link_libraries(${NAME} v8)
+  include_directories(${GraphLab_SOURCE_DIR}/deps/local/include/v8)
+  target_link_libraries(${NAME} v8_base v8_snapshot)
+  add_dependencies(${NAME} libv8 cvv8)
 endmacro(requires_v8)
 
 # ImageMagick =================================================================
@@ -289,10 +291,10 @@ ExternalProject_Add(imagemagick
   LDFLAGS=-L${GraphLab_SOURCE_DIR}/deps/local/lib       
   make
   INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local)
-include_directories(${GraphLab_SOURCE_DIR}/deps/local/include/ImageMagick)
 add_dependencies(imagemagick libjpeg)
 
 macro(requires_imagemagick NAME)
+  include_directories(${GraphLab_SOURCE_DIR}/deps/local/include/ImageMagick)
   target_link_libraries(${NAME} Magick++ jpeg)
   add_dependencies(${NAME} imagemagick libjpeg)
 endmacro(requires_imagemagick)
@@ -334,6 +336,10 @@ ExternalProject_Add(libevent
 #link_libraries(event)
 #link_libraries(event_pthreads)
 
+
+# libjson ====================================================================
+# Lib Json is used to support json serialization for long term storage of
+# graph data.
 ExternalProject_Add(libjson
   PREFIX ${GraphLab_SOURCE_DIR}/deps/json
   URL http://voxel.dl.sourceforge.net/project/libjson/libjson_7.6.0.zip
@@ -350,10 +356,12 @@ ExternalProject_Add(libjson
 # JNI =========================================================================
 # We use JNI for jvm interfacing and for hdfs support.  We currently only 
 # detect the presence of java and do not install our own version. 
-find_package(Java)
-find_package(JNI)
 
 if(NOT NO_JAVAC)
+  find_package(Java)
+  find_package(JNI)
+
+
   if((EXISTS ${JAVA_INCLUDE_PATH}/jni.h))
     set(JNI_REALLY_FOUND 1 CACHE BOOL "Tests whether the header actually exists")
     message(STATUS "jni.h was found at " ${JAVA_INCLUDE_PATH}/jni.h)
@@ -371,31 +379,36 @@ if(NOT NO_JAVAC)
     set(JNI_REALLY_FOUND 0 CACHE BOOL "Tests whether the header actually exists")
     message(STATUS "jni.h was not found at " ${JAVA_INCLUDE_PATH}/jni.h)
   endif( )
+
+  # Ant =========================================================================
+  # Ant is used to build the graphlab JVM interface
+  find_package(Ant)
+
+  # LibHDFS ===================================================================== 
+  # If JNI is found we install libhdfs which allows programs to read and write
+  # to hdfs filesystems
+  if( JNI_REALLY_FOUND )
+    message(STATUS "Building libhdfs")
+    ExternalProject_Add(hadoop
+      PREFIX ${GraphLab_SOURCE_DIR}/deps/hadoop
+      URL http://www.gtlib.gatech.edu/pub/apache/hadoop/common/hadoop-1.0.1/hadoop-1.0.1.tar.gz
+      URL_MD5 e627d9b688c4de03cba8313bd0bba148
+      UPDATE_COMMAND chmod +x <SOURCE_DIR>/src/c++/libhdfs/install-sh <SOURCE_DIR>/src/c++/libhdfs/configure
+      PATCH_COMMAND patch -p1 < ${GraphLab_SOURCE_DIR}/patches/libhdfs-compile-osx.patch
+      BUILD_IN_SOURCE 1
+      CONFIGURE_COMMAND <SOURCE_DIR>/src/c++/libhdfs/configure JVM_ARCH=tune=i686 --prefix=<INSTALL_DIR> --with-java=${JAVA_HOME}
+      INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local
+      TEST_COMMAND bash -c "mkdir -p <INSTALL_DIR>/include && cp <SOURCE_DIR>/src/c++/libhdfs/hdfs.h <INSTALL_DIR>/include")
+    set(HADOOP_FOUND 1 CACHE BOOL "Hadoop was found")
+    add_definitions(-DHAS_HADOOP)
+    # link_libraries(hdfs ${JAVA_JVM_LIBRARY})
+  endif( JNI_REALLY_FOUND )
+
+
+
 endif()
 
-# Ant =========================================================================
-# Ant is used to build the graphlab JVM interface
-find_package(Ant)
 
-# LibHDFS =====================================================================
-# If JNI is found we install libhdfs which allows programs to read and write
-# to hdfs filesystems
-if( JNI_REALLY_FOUND )
-  message(STATUS "Building libhdfs")
-  ExternalProject_Add(hadoop
-    PREFIX ${GraphLab_SOURCE_DIR}/deps/hadoop
-    URL http://www.gtlib.gatech.edu/pub/apache/hadoop/common/hadoop-1.0.1/hadoop-1.0.1.tar.gz
-    URL_MD5 e627d9b688c4de03cba8313bd0bba148
-    UPDATE_COMMAND chmod +x <SOURCE_DIR>/src/c++/libhdfs/install-sh <SOURCE_DIR>/src/c++/libhdfs/configure
-    PATCH_COMMAND patch -p1 < ${GraphLab_SOURCE_DIR}/patches/libhdfs-compile-osx.patch
-    BUILD_IN_SOURCE 1
-    CONFIGURE_COMMAND <SOURCE_DIR>/src/c++/libhdfs/configure JVM_ARCH=tune=i686 --prefix=<INSTALL_DIR> --with-java=${JAVA_HOME}
-    INSTALL_DIR ${GraphLab_SOURCE_DIR}/deps/local
-    TEST_COMMAND bash -c "mkdir -p <INSTALL_DIR>/include && cp <SOURCE_DIR>/src/c++/libhdfs/hdfs.h <INSTALL_DIR>/include")
-  set(HADOOP_FOUND 1 CACHE BOOL "Hadoop was found")
-  add_definitions(-DHAS_HADOOP)
-  # link_libraries(hdfs ${JAVA_JVM_LIBRARY})
-endif( JNI_REALLY_FOUND )
 
 # MPI =========================================================================
 # MPI is currently used to establish communication between rpc nodes
