@@ -31,11 +31,11 @@
 #include <boost/integer.hpp>
 #include <boost/random.hpp>
 
+#include <graphlab.hpp>
 
 #include <graphlab/parallel/pthread_tools.hpp>
 #include <graphlab/parallel/atomic.hpp>
 
-#include <graphlab/util/synchronized_queue.hpp>
 #include <graphlab/util/generics/float_selector.hpp>
 
 

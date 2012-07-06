@@ -1,3 +1,14 @@
+/*
+-------------------------------------------------------------------------
+ CxxTest: A lightweight C++ unit testing library.
+ Copyright (c) 2008 Sandia Corporation.
+ This software is distributed under the LGPL License v2.1
+ For more information, see the COPYING file in the top CxxTest directory.
+ Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+ the U.S. Government retains certain rights in this software.
+-------------------------------------------------------------------------
+*/
+
 #ifndef __cxxtest__Descriptions_h__
 #define __cxxtest__Descriptions_h__
 
@@ -18,11 +29,13 @@ namespace CxxTest
         virtual ~TestDescription();
         
         virtual const char *file() const = 0;
-        virtual unsigned line() const = 0;
+        virtual int line() const = 0;
         virtual const char *testName() const = 0;
         virtual const char *suiteName() const = 0;
         
         virtual void run() = 0;
+        virtual bool setUp() = 0;
+        virtual bool tearDown() = 0;
 
         virtual const TestDescription *next() const = 0;
         virtual TestDescription *next() = 0;        
@@ -34,7 +47,7 @@ namespace CxxTest
         virtual ~SuiteDescription();
         
         virtual const char *file() const = 0;
-        virtual unsigned line() const = 0;
+        virtual int line() const = 0;
         virtual const char *suiteName() const = 0;
         virtual TestSuite *suite() const = 0;
         
@@ -48,6 +61,9 @@ namespace CxxTest
 
         virtual void activateAllTests() = 0;
         virtual bool leaveOnly( const char * /*testName*/ ) = 0;
+
+        virtual bool setUp() = 0;
+        virtual bool tearDown() = 0;
     };
 
     class WorldDescription : public Link
@@ -55,6 +71,7 @@ namespace CxxTest
     public:
         virtual ~WorldDescription();
         
+        virtual const char *worldName() const { return "cxxtest"; }
         virtual unsigned numSuites( void ) const = 0;
         virtual unsigned numTotalTests( void ) const = 0;
         virtual const SuiteDescription &suiteDescription( unsigned /*i*/ ) const = 0;

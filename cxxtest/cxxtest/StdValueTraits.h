@@ -1,3 +1,14 @@
+/*
+-------------------------------------------------------------------------
+ CxxTest: A lightweight C++ unit testing library.
+ Copyright (c) 2008 Sandia Corporation.
+ This software is distributed under the LGPL License v2.1
+ For more information, see the COPYING file in the top CxxTest directory.
+ Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+ the U.S. Government retains certain rights in this software.
+-------------------------------------------------------------------------
+*/
+
 #ifndef __cxxtest_StdValueTraits_h__
 #define __cxxtest_StdValueTraits_h__
 
@@ -91,12 +102,18 @@ namespace CxxTest
     template<class Stream, class Iterator>
     void dumpRange( Stream &s, Iterator first, Iterator last )
     {
+        if ( first == last ) {
+            s << "{}";
+            return;
+        }
+        
         s << "{ ";
         while ( first != last ) {
             s << TS_AS_STRING(*first);
-            ++ first;
-            s << ((first == last) ? " }" : ", ");
+            if ( ++ first != last )
+                s << ", ";
         }
+        s << " }";
     }
 
 #ifdef _CXXTEST_PARTIAL_TEMPLATE_SPECIALIZATION
@@ -222,7 +239,7 @@ namespace CxxTest
         }
     };
 #endif // _CXXTEST_PARTIAL_TEMPLATE_SPECIALIZATION
-};
+}
 
 #endif // CXXTEST_USER_VALUE_TRAITS
 

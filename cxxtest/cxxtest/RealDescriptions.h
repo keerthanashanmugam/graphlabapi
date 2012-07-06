@@ -1,3 +1,14 @@
+/*
+-------------------------------------------------------------------------
+ CxxTest: A lightweight C++ unit testing library.
+ Copyright (c) 2008 Sandia Corporation.
+ This software is distributed under the LGPL License v2.1
+ For more information, see the COPYING file in the top CxxTest directory.
+ Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+ the U.S. Government retains certain rights in this software.
+-------------------------------------------------------------------------
+*/
+
 #ifndef __cxxtest__RealDescriptions_h__
 #define __cxxtest__RealDescriptions_h__
 
@@ -19,7 +30,7 @@ namespace CxxTest
         void initialize( List &argList, SuiteDescription &argSuite, unsigned argLine, const char *argTestName );
         
         const char *file() const;
-        unsigned line() const;
+        int line() const;
         const char *testName() const;
         const char *suiteName() const;
 
@@ -39,7 +50,7 @@ namespace CxxTest
         virtual void runTest() = 0;
         
         SuiteDescription *_suite;
-        unsigned _line;
+        int _line;
         const char *_testName;
     };
 
@@ -52,7 +63,7 @@ namespace CxxTest
         void initialize( const char *argFile, unsigned argLine, const char *argSuiteName, List &argTests );
 
         const char *file() const;
-        unsigned line() const;
+        int line() const;
         const char *suiteName() const;
 
         TestDescription *firstTest();
@@ -71,7 +82,7 @@ namespace CxxTest
         RealSuiteDescription &operator=( const RealSuiteDescription & );
         
         const char *_file;
-        unsigned _line;
+        int _line;
         const char *_suiteName;
         List *_tests;
 
@@ -202,6 +213,7 @@ namespace CxxTest
     {
     public:
         static List &suites();
+        const char *worldName() const { return _worldName;}
         unsigned numSuites( void ) const;
         unsigned numTotalTests( void ) const;
         SuiteDescription *firstSuite();
@@ -213,6 +225,8 @@ namespace CxxTest
         bool setUp();
         bool tearDown();
         static void reportError( const char *message );
+
+        static const char *_worldName;
     };
 
     void activateAllTests();

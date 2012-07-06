@@ -1,7 +1,8 @@
 #include <iostream>
+
 #include <graphlab/parallel/pthread_tools.hpp>
 #include <graphlab/parallel/thread_pool.hpp>
-#include <graphlab/parallel/thread_flip_flop.hpp>
+#include <graphlab/parallel/atomic.hpp>
 #include <graphlab/logger/assertions.hpp>
 #include <graphlab/util/timer.hpp>
 #include <boost/bind.hpp>
@@ -129,81 +130,6 @@ void test_pool_exception_forwarding(){
 
 
 
-const int num_flip_flop_threads = 4;
-barrier f0_barrier(num_flip_flop_threads);
-barrier f1_barrier(num_flip_flop_threads);
-atomic<size_t> f0;
-atomic<size_t> f1;
-thread_flip_flop flipflop(num_flip_flop_threads,
-                          num_flip_flop_threads);
-
-void flip_flop_0() {
-  for (size_t i = 0; i < 1000; ++i) {
-    for (size_t j = 0;j < 10; ++j) {
-      f0.inc();
-    }
-    f0_barrier.wait();
-    ASSERT_EQ(f0.value - num_flip_flop_threads * 10, f1.value);
-    flipflop.wait(0);
-  }
-  flipflop.stop_blocking();
-}
-
-void flip_flop_1() {
-  for (size_t i = 0; i < 1000; ++i) {
-    flipflop.wait(1);
-    for (size_t j = 0;j < 10; ++j) {
-      f1.inc();
-    }
-  }
-  flipflop.stop_blocking();
-}
-
-
-
-template<typename Mutex>
-void test_adaptive_mutex_helper(Mutex* mut, size_t* val) {
-  for(size_t i = 0; i < 20000000; ++i) {
-    mut->lock(); 
-    *val += size_t(log(i+1.0) + log(exp(i+1.0) + 1.0) + 1) ; 
-    mut->unlock();
-  }
-}
-
-size_t counter = 0;
-
-void adaptive_mutex_test() {
-  const size_t nthreads = 4;
-  std::cout << std::endl;
-  thread_pool pool(nthreads);
-  {
-    timer ti;
-    ti.start();
-    typedef adaptive_mutex<0> mutex_type;
-    mutex_type mut;
-
-    for (size_t i = 0; i < nthreads; ++i) {
-      pool.launch(boost::bind(test_adaptive_mutex_helper<mutex_type>, &mut, &counter) );
-    }
-    pool.join();
-    std::cout << counter << std::endl;   
-    std::cout << ti.current_time() << std::endl;
-  }
- 
-  {
-    timer ti;
-    ti.start();
-    typedef adaptive_mutex<100> mutex_type;
-    mutex_type mut;
-    for (size_t i = 0; i < nthreads; ++i) {
-      pool.launch(boost::bind(test_adaptive_mutex_helper<mutex_type>, &mut, &counter) );
-    }
-    pool.join();
-    std::cout << counter << std::endl;
-    std::cout << ti.current_time() << std::endl;
-  }
-
-}
 
 
 
@@ -220,9 +146,5 @@ public:
   void test_thread_pool_exception(void) {
     test_pool_exception_forwarding();
   }
-
-//   void test_adaptive_mutex() {
-//     adaptive_mutex_test();
-//   }
 
 };

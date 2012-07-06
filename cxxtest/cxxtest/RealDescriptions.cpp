@@ -1,3 +1,14 @@
+/*
+-------------------------------------------------------------------------
+ CxxTest: A lightweight C++ unit testing library.
+ Copyright (c) 2008 Sandia Corporation.
+ This software is distributed under the LGPL License v2.1
+ For more information, see the COPYING file in the top CxxTest directory.
+ Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+ the U.S. Government retains certain rights in this software.
+-------------------------------------------------------------------------
+*/
+
 #ifndef __cxxtest__RealDescriptions_cpp__
 #define __cxxtest__RealDescriptions_cpp__
 
@@ -50,7 +61,9 @@ namespace CxxTest
         }
 
         _TS_TRY {
-            _TSM_ASSERT_THROWS_NOTHING( file(), line(), "Exception thrown from setUp()", suite()->setUp() );
+            bool ok = false;
+            _TSM_ASSERT_THROWS_NOTHING( file(), line(), "Exception thrown from setUp()", suite()->setUp(); ok=true );
+            if (ok == false) return ok;
         }
         _TS_CATCH_ABORT( { return false; } );
 
@@ -82,7 +95,7 @@ namespace CxxTest
     }
 
     const char *RealTestDescription::file() const { return _suite->file(); }
-    unsigned RealTestDescription::line() const { return _line; }
+    int RealTestDescription::line() const { return _line; }
     const char *RealTestDescription::testName() const { return _testName; }
     const char *RealTestDescription::suiteName() const { return _suite->suiteName(); }
 
@@ -121,7 +134,7 @@ namespace CxxTest
     }
 
     const char *RealSuiteDescription::file() const { return _file; }
-    unsigned RealSuiteDescription::line() const { return _line; }
+    int RealSuiteDescription::line() const { return _line; }
     const char *RealSuiteDescription::suiteName() const { return _suiteName; }
 
     TestDescription *RealSuiteDescription::firstTest() { return (RealTestDescription *)_tests->head(); }
@@ -263,7 +276,13 @@ namespace CxxTest
     {
         for ( GlobalFixture *gf = GlobalFixture::firstGlobalFixture(); gf != 0; gf = gf->nextGlobalFixture() ) {
             bool ok;
-            _TS_TRY { ok = gf->setUpWorld(); }
+            _TS_TRY { 
+                ok = gf->setUpWorld(); 
+                if (tracker().testFailed()) {
+                    tracker().initialize();
+                    ok = false;
+                    }
+                }
             _TS_LAST_CATCH( { ok = false; } );
 
             if ( !ok ) {

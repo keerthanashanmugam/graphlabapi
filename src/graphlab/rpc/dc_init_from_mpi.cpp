@@ -31,13 +31,13 @@
 #include <graphlab/util/net_util.hpp>
 #include <graphlab/logger/logger.hpp>
 
-#ifdef HASMPI
+#ifdef HAS_MPI
 #include <graphlab/util/mpi_tools.hpp>
 #endif
 namespace graphlab {
 
 bool init_param_from_mpi(dc_init_param& param,dc_comm_type commtype) {
-#ifdef HASMPI
+#ifdef HAS_MPI
   ASSERT_MSG(commtype == TCP_COMM, "MPI initialization only supports TCP at the moment");
   // Look for a free port to use. 
   std::pair<size_t, int> port_and_sock = get_free_tcp_port();
@@ -53,7 +53,7 @@ bool init_param_from_mpi(dc_init_param& param,dc_comm_type commtype) {
   // set defaults
   param.curmachineid = (procid_t)(mpi_tools::rank());
 
-  param.numhandlerthreads = DEFAULT_NUMHANDLERTHREADS;
+  param.numhandlerthreads = RPC_DEFAULT_NUMHANDLERTHREADS;
   param.commtype = commtype;
   param.initstring = param.initstring + std::string(" __sockhandle__=") + tostr(sock) + " ";
   return true;

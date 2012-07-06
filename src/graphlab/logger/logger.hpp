@@ -1,4 +1,4 @@
-/**  
+/*
  * Copyright (c) 2009 Carnegie Mellon University. 
  *     All rights reserved.
  *
@@ -36,8 +36,6 @@
  * The difference between the hard level and the soft level is that the
  * soft level can be changed at runtime, while the hard level optimizes away
  * logging calls at compile time.
- *
- * @author Yucheng Low (ylow)
  */
 
 #ifndef GRAPHLAB_LOG_LOG_HPP
@@ -49,6 +47,7 @@
 #include <cstring>
 #include <cstdarg>
 #include <pthread.h>
+#include <graphlab/util/timer.hpp>
 /**
  * \def LOG_FATAL
  *   Used for fatal and probably irrecoverable conditions
@@ -56,15 +55,19 @@
  *   Used for errors which are recoverable within the scope of the function
  * \def LOG_WARNING
  *   Logs interesting conditions which are probably not fatal
+ * \def LOG_EMPH
+ *   Outputs as LOG_INFO, but in LOG_WARNING colors. Useful for
+ *   outputting information you want to emphasize.
  * \def LOG_INFO
  *   Used for providing general useful information
  * \def LOG_DEBUG
  *   Debugging purposes only
  */
-#define LOG_NONE 5
-#define LOG_FATAL 4
-#define LOG_ERROR 3
-#define LOG_WARNING 2
+#define LOG_NONE 6
+#define LOG_FATAL 5
+#define LOG_ERROR 4
+#define LOG_WARNING 3
+#define LOG_EMPH 2
 #define LOG_INFO 1
 #define LOG_DEBUG 0
 
@@ -76,7 +79,7 @@
  */
 
 #ifndef OUTPUTLEVEL
-#define OUTPUTLEVEL LOG_DEBUG
+#define OUTPUTLEVEL LOG_EMPH
 #endif
 /// If set, logs to screen will be printed in color
 #define COLOROUTPUT
@@ -94,7 +97,14 @@
 // totally disable logging
 #define logger(lvl,fmt,...)
 #define logbuf(lvl,fmt,...)
-#define logstream
+#define logstream(lvl) null_stream()
+
+#define logger_once(lvl,fmt,...)
+#define logstream_once(lvl) null_stream()
+
+#define logger_ontick(sec,lvl,fmt,...)
+#define logstream_ontick(sec, lvl) null_stream()
+
 #else
 
 #define logger(lvl,fmt,...)                 \
@@ -107,6 +117,47 @@
 
 #define logstream(lvl)                      \
     (log_stream_dispatch<(lvl >= OUTPUTLEVEL)>::exec(lvl,__FILE__, __func__ ,__LINE__) )
+
+#define logger_once(lvl,fmt,...)                 \
+{    \
+  static bool __printed__ = false;    \
+  if (!__printed__) {                 \
+    __printed__ = true;               \
+    (log_dispatch<(lvl >= OUTPUTLEVEL)>::exec(lvl,__FILE__, __func__ ,__LINE__,fmt,##__VA_ARGS__)); \
+  }  \
+}
+
+#define logstream_once(lvl)                      \
+(*({    \
+  static bool __printed__ = false;    \
+  bool __prev_printed__ = __printed__; \
+  if (!__printed__) __printed__ = true;  \
+  &(log_stream_dispatch<(lvl >= OUTPUTLEVEL)>::exec(lvl,__FILE__, __func__ ,__LINE__, !__prev_printed__) ); \
+}))
+
+#define logger_ontick(sec,lvl,fmt,...)                 \
+{    \
+  static float last_print = -sec - 1;        \
+  float curtime = graphlab::timer::approx_time_seconds(); \
+  if (last_print + sec <= curtime) {                 \
+    last_print = curtime;                     \
+    (log_dispatch<(lvl >= OUTPUTLEVEL)>::exec(lvl,__FILE__, __func__ ,__LINE__,fmt,##__VA_ARGS__)); \
+  }  \
+}
+
+#define logstream_ontick(sec,lvl)                      \
+(*({    \
+  static float last_print = -sec - 1;        \
+  float curtime = graphlab::timer::approx_time_seconds();        \
+  bool print_now = false;             \
+  if (last_print + sec <= curtime) {                 \
+    last_print = curtime;                 \
+    print_now = true;                \
+  }                    \
+  &(log_stream_dispatch<(lvl >= OUTPUTLEVEL)>::exec(lvl,__FILE__, __func__ ,__LINE__, print_now) ); \
+}))
+
+  
 #endif
 
 namespace logger_impl {
@@ -161,7 +212,7 @@ class file_logger{
     return log_level;
   }
 
-  file_logger& start_stream(int lineloglevel,const char* file,const char* function, int line);
+  file_logger& start_stream(int lineloglevel,const char* file,const char* function, int line, bool do_start = true);
   
   template <typename T>
   file_logger& operator<<(T a) {
@@ -315,17 +366,20 @@ struct log_stream_dispatch {};
 
 template <>
 struct log_stream_dispatch<true> {
-  inline static file_logger& exec(int lineloglevel,const char* file,const char* function, int line) {
-    return global_logger().start_stream(lineloglevel, file, function, line);
+  inline static file_logger& exec(int lineloglevel,const char* file,const char* function, int line, bool do_start = true) {
+    return global_logger().start_stream(lineloglevel, file, function, line, do_start);
   }
 };
 
 template <>
 struct log_stream_dispatch<false> {
-  inline static null_stream exec(int lineloglevel,const char* file,const char* function, int line) {
+  inline static null_stream exec(int lineloglevel,const char* file,const char* function, int line, bool do_start = true) {
     return null_stream();
   }
 };
+
+void textcolor(FILE* handle, int attr, int fg);
+void reset_color(FILE* handle);
 
 #include <graphlab/logger/assertions.hpp>
 

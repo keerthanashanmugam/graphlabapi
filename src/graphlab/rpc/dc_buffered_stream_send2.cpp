@@ -1,4 +1,4 @@
-/**  
+/*  
  * Copyright (c) 2009 Carnegie Mellon University. 
  *     All rights reserved.
  *
@@ -100,8 +100,8 @@ namespace dc_impl {
   }
 
 
-  bool dc_buffered_stream_send2::get_outgoing_data(circular_iovec_buffer& outdata) {
-    if (writebuffer_totallen.value == 0) return false;
+  size_t dc_buffered_stream_send2::get_outgoing_data(circular_iovec_buffer& outdata) {
+    if (writebuffer_totallen.value == 0) return 0;
     
     // swap the buffer
     size_t curid = bufid;
@@ -113,6 +113,7 @@ namespace dc_impl {
     
     // ok now we have exclusive access to the buffer
     size_t sendlen = buffer[curid].numbytes;
+    size_t real_send_len = 0;
     if (sendlen > 0) {
       size_t oldbsize = buffer[curid].buf.size();
       size_t numel = std::min((size_t)(buffer[curid].numel.value), buffer[curid].buf.size());
@@ -128,6 +129,7 @@ namespace dc_impl {
       sendbuffer[0].iov_len = sizeof(block_header_type);
       // give the buffer away
       for (size_t i = 0;i < numel; ++i) {
+        real_send_len += sendbuffer[i].iov_len;
         outdata.write(sendbuffer[i]);
       }
       // reset the buffer;
@@ -141,14 +143,14 @@ namespace dc_impl {
         sendbuffer.resize(oldbsize);
       }
       __sync_fetch_and_add(&(buffer[curid].ref_count), 1);
-      return true;
+      return real_send_len;
     }
     else {
       // reset the buffer;
       buffer[curid].numbytes = 0;
       buffer[curid].numel = 1;
       __sync_fetch_and_add(&(buffer[curid].ref_count), 1);
-      return false;
+      return 0;
     }
   }
 } // namespace dc_impl

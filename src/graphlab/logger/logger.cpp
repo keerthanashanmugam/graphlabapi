@@ -45,6 +45,7 @@ void streambuffdestructor(void* v){
 
 const char* messages[] = {  "DEBUG:    ",
                             "INFO:     ",
+                            "INFO:     ",
                             "WARNING:  ",
                             "ERROR:    ",
                             "FATAL:    "};
@@ -53,7 +54,7 @@ const char* messages[] = {  "DEBUG:    ",
 file_logger::file_logger() {
   log_file = "";
   log_to_console = true;
-  log_level = LOG_WARNING;
+  log_level = LOG_EMPH;
   pthread_mutex_init(&mut, NULL);
   pthread_key_create(&streambuffkey, streambuffdestructor);
 }
@@ -154,6 +155,9 @@ void file_logger::_log(int lineloglevel,const char* file,const char* function,
         textcolor(stderr, BRIGHT, RED);
       }
       else if (lineloglevel == LOG_WARNING) {
+        textcolor(stderr, BRIGHT, MAGENTA);
+      }
+      else if (lineloglevel == LOG_EMPH) {
         textcolor(stderr, BRIGHT, GREEN);
       }
 #endif
@@ -210,12 +214,14 @@ void file_logger::_lograw(int lineloglevel, const char* buf, int len) {
       textcolor(stderr, BRIGHT, RED);
     }
     else if (lineloglevel == LOG_WARNING) {
-      textcolor(stderr, BRIGHT, GREEN);
+      textcolor(stderr, BRIGHT, MAGENTA);
     }
     else if (lineloglevel == LOG_DEBUG) {
       textcolor(stderr, BRIGHT, YELLOW);
     }
-
+    else if (lineloglevel == LOG_EMPH) {
+      textcolor(stderr, BRIGHT, GREEN);
+    }
 #endif
     std::cerr.write(buf,len);
 #ifdef COLOROUTPUT
@@ -224,10 +230,12 @@ void file_logger::_lograw(int lineloglevel, const char* buf, int len) {
   }
 }
 
-file_logger& file_logger::start_stream(int lineloglevel,const char* file,const char* function, int line) {
+file_logger& file_logger::start_stream(int lineloglevel,const char* file, 
+                                       const char* function, int line, bool do_start) {
   // get the stream buffer
-  logger_impl::streambuff_tls_entry* streambufentry = reinterpret_cast<logger_impl::streambuff_tls_entry*>(
-                                                                                                           pthread_getspecific(streambuffkey));
+  logger_impl::streambuff_tls_entry* streambufentry =
+        reinterpret_cast<logger_impl::streambuff_tls_entry*>(
+                              pthread_getspecific(streambuffkey));
   // create the key if it doesn't exist
   if (streambufentry == NULL) {
     streambufentry = new logger_impl::streambuff_tls_entry;
@@ -236,6 +244,12 @@ file_logger& file_logger::start_stream(int lineloglevel,const char* file,const c
   std::stringstream& streambuffer = streambufentry->streambuffer;
   bool& streamactive = streambufentry->streamactive;
   
+  // if do not start the stream, just quit
+  if (do_start == false) {
+    streamactive = false;
+    return *this;
+  }
+ 
   file = ((strrchr(file, '/') ? : file- 1) + 1);
  
   if (lineloglevel >= log_level){

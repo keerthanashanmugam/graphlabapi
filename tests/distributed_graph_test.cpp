@@ -1,456 +1,132 @@
-/**  
- * Copyright (c) 2009 Carnegie Mellon University. 
- *     All rights reserved.
- *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an "AS
- *  IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- *  express or implied.  See the License for the specific language
- *  governing permissions and limitations under the License.
- *
- * For more about this software visit:
- *
- *      http://www.graphlab.ml.cmu.edu
- *
- */
-
-
-#include <pthread.h>
-
-
+// standard C++ headers
 #include <iostream>
-#include <vector>
-#include <set>
-#include <algorithm>
-#include <graphlab/graph/graph.hpp>
-#include <graphlab/graph/graph_partitioner.hpp>
-#include <graphlab/distributed2/graph/distributed_graph.hpp>
-#include <graphlab/graph/disk_graph.hpp>
+
 #include <graphlab/rpc/dc.hpp>
-#include <graphlab/rpc/dc_init_from_mpi.hpp>
 #include <graphlab/util/mpi_tools.hpp>
-#include <graphlab/logger/assertions.hpp>
+#include <graphlab/rpc/dc_init_from_mpi.hpp>
+#include <graphlab/graph/distributed_graph.hpp>
 #include <graphlab/macros_def.hpp>
 
 
-using namespace graphlab;
+
+struct vertex_data: public graphlab::IS_POD_TYPE  {
+  size_t num_flips;
+  vertex_data() : num_flips(0) { }
+};
+
+struct edge_data: public graphlab::IS_POD_TYPE  {
+  int from;
+  int to;
+  edge_data (int f = 0, int t = 0) : from(f), to(t) {}
+};
+
+struct edge_data_empty { };
+
+typedef graphlab::distributed_graph<vertex_data, edge_data> graph_type;
+typedef graph_type::local_edge_list_type local_edge_list_type;
+typedef graph_type::local_edge_type local_edge_type;
+typedef graph_type::local_vertex_type local_vertex_type;
 
 
-void generate_atoms() {
-  graphlab::graph<size_t, double> testgraph;
-  for (size_t v = 0; v < 10000; ++v) testgraph.add_vertex(v);
-  for (size_t i = 0;i < 9999; ++i) {
-    testgraph.add_edge(i, i+1, i);
-  }
-  testgraph.add_edge(9999,0,9999);
-  std::vector<graph_partitioner::part_id_type> parts;
-  graph_partitioner::partition("metis", testgraph, 4, parts);
-  testgraph.compute_coloring();
-   
-  graphlab::disk_graph<size_t, double> dg("atom_ne", 4);
-  dg.create_from_graph(testgraph, parts);
-  dg.finalize();
-}
-
-
-
-void check_vertex_values(distributed_graph<size_t, double> &dg, size_t value) {
-  typedef distributed_graph<size_t, double>::vertex_id_type vertex_id_type;
-  const std::vector<vertex_id_type>& localvertices = dg.owned_vertices();
-  const std::vector<vertex_id_type>& ghostvertices = dg.ghost_vertices();
-  for (size_t i = 0;i < localvertices.size(); ++i) {
-    ASSERT_EQ(dg.vertex_data(localvertices[i]), value);
-  }
-  for (size_t i = 0;i < ghostvertices.size(); ++i) {
-    ASSERT_EQ(dg.vertex_data(ghostvertices[i]), value);
-  }
-}
-
-void check_edge_values(distributed_graph<size_t, double> &dg, double value) {
-  typedef distributed_graph<size_t, double>::vertex_id_type vertex_id_type;
-  typedef distributed_graph<size_t, double>::edge_id_type edge_id_type;
-  const std::vector<vertex_id_type>& localvertices = dg.owned_vertices();
-  for (size_t i = 0;i < localvertices.size(); ++i) {
-    foreach(edge_id_type eid, dg.in_edge_ids(localvertices[i])) {
-      ASSERT_EQ(dg.edge_data(eid), value);
-    }
-    foreach(edge_id_type eid, dg.out_edge_ids(localvertices[i])) {
-      ASSERT_EQ(dg.edge_data(eid), value);
-    }
-  }
-}
-
-void set_all_vertices_to_value(distributed_graph<size_t, double> &dg, size_t value) {
-  typedef distributed_graph<size_t, double>::vertex_id_type vertex_id_type;
-  const std::vector<vertex_id_type>& localvertices = dg.owned_vertices();
-  // ok. now everyone set to zero
-  for (size_t i = 0;i < localvertices.size(); ++i) {
-    dg.vertex_data(localvertices[i]) = value;
-    dg.vertex_is_modified(localvertices[i]);
-  }
-}
-
-void set_all_edges_to_value(distributed_graph<size_t, double> &dg, double value) {
-  typedef distributed_graph<size_t, double>::vertex_id_type vertex_id_type;
-  typedef distributed_graph<size_t, double>::edge_id_type edge_id_type;
-  const std::vector<vertex_id_type>& localvertices = dg.owned_vertices();
-  for (size_t i = 0;i < localvertices.size(); ++i) {
-    foreach(edge_id_type eid, dg.in_edge_ids(localvertices[i])) {
-      dg.edge_data(eid) = value;
-      dg.edge_is_modified(eid);
-    }
-  }
-}
-
-void set_all_in_boundary(distributed_graph<size_t, double> &dg, size_t vvalue, double evalue) {
-  typedef distributed_graph<size_t, double>::vertex_id_type vertex_id_type;
-  typedef distributed_graph<size_t, double>::edge_id_type edge_id_type;
-  const std::vector<vertex_id_type>& boundvertices = dg.boundary_scopes();
-  for (size_t i = 0;i < boundvertices.size(); ++i) {
-    dg.vertex_data(boundvertices[i]) = vvalue;
-    dg.vertex_is_modified(boundvertices[i]);
-
-    foreach(edge_id_type eid, dg.in_edge_ids(boundvertices[i])) {
-      dg.edge_data(eid) = evalue;
-      dg.edge_is_modified(eid);
-
-      vertex_id_type sourcevid = dg.source(eid);
-      dg.vertex_data(sourcevid) = vvalue;
-      dg.vertex_is_modified(sourcevid);
-    }
-
-    foreach(edge_id_type eid, dg.out_edge_ids(boundvertices[i])) {
-      dg.edge_data(eid) = evalue;
-      dg.edge_is_modified(eid);
-
-      vertex_id_type targetvid = dg.target(eid);
-      dg.vertex_data(targetvid) = vvalue;
-      dg.vertex_is_modified(targetvid);
-    }
-  }
-}
-
-
-void boundary_has_at_least_one_match(distributed_graph<size_t, double> &dg, size_t vvalue, double evalue) {
-  // test only owned data
-  bool vmatch = false;
-  bool ematch = false;
-  typedef distributed_graph<size_t, double>::vertex_id_type vertex_id_type;
-  typedef distributed_graph<size_t, double>::edge_id_type edge_id_type;
-  const std::vector<vertex_id_type>& boundvertices = dg.boundary_scopes();
-  for (size_t i = 0;i < boundvertices.size(); ++i) {
-    if (dg.vertex_data(boundvertices[i]) == vvalue) vmatch = true;
-
-    foreach(edge_id_type eid, dg.in_edge_ids(boundvertices[i])) {
-      if (dg.edge_data(eid) == evalue) ematch = true;
-    }
-  }
-  ASSERT_TRUE(vmatch);
-  ASSERT_TRUE(ematch);
-}
-
-void sync_test(distributed_graph<size_t, double> &dg, distributed_control &dc) {
-  size_t VVAL = 0;
-  double EVAL = 0;
-  std::cout << "Owned data modified. Test if Ghost data are updated" << std::endl;
-  std::cout << "===================================================" << std::endl;
-  std::cout << "Testing Synchronous Vertex sync. " << std::endl;
-  set_all_vertices_to_value(dg, VVAL);
-  dc.barrier();
-  dg.synchronize_all_vertices();
-  check_vertex_values(dg, VVAL);
-  dc.barrier();
-
-  ++VVAL;
-
-  std::cout << "Testing Asynchronous Vertex sync. " << std::endl;
-  set_all_vertices_to_value(dg, VVAL);
-  dc.barrier();
-  dg.synchronize_all_vertices(true);
-  dg.wait_for_all_async_syncs();
-  check_vertex_values(dg, VVAL);
-  dc.barrier();
-
-  ++VVAL;
-
-  std::cout << "Testing Synchronous Edge sync. " << std::endl;
-  set_all_edges_to_value(dg, EVAL);
-  dc.barrier();
-  dg.synchronize_all_edges();
-  check_edge_values(dg, EVAL);
-  dc.barrier();
-
-  ++EVAL;
-
-  std::cout << "Testing Asynchronous Edge sync. " << std::endl;
-  set_all_edges_to_value(dg, EVAL);
-  dc.barrier();
-  dg.synchronize_all_edges(true);
-  dg.wait_for_all_async_syncs();
-  check_edge_values(dg, EVAL);
-  dc.barrier();
-
-  ++EVAL;
-  ++VVAL;
-
-  std::cout << "Testing Synchronous Scope sync. " << std::endl;
-  set_all_vertices_to_value(dg, VVAL);
-  set_all_edges_to_value(dg, EVAL);
-  dc.barrier();
-  dg.synchronize_all_scopes();
-  check_vertex_values(dg, VVAL);
-  check_edge_values(dg, EVAL);
-  dc.barrier();
-
-  ++EVAL;
-  ++VVAL;
-
-  std::cout << "Testing Asynchronous Scope sync. " << std::endl;
-  set_all_vertices_to_value(dg, VVAL);
-  set_all_edges_to_value(dg, EVAL);
-  dc.barrier();
-  dg.synchronize_all_scopes(true);
-  dg.wait_for_all_async_syncs();
-  check_vertex_values(dg, VVAL);
-  check_edge_values(dg, EVAL);
-  dc.barrier();
-
-
-
-  ++VVAL;
-  
-  std::cout << "Testing synchronous vertex pushing" << std::endl;
-  set_all_vertices_to_value(dg, VVAL);
-  dg.push_all_owned_vertices_to_replicas();
-  dc.barrier();
-  check_vertex_values(dg, VVAL);
-  dc.barrier();
-  
-  ++VVAL;  
-  
-  std::cout << "Testing asynchronous vertex pushing" << std::endl;
-  set_all_vertices_to_value(dg, VVAL);
-  dg.push_all_owned_vertices_to_replicas();
-  dg.wait_for_all_async_pushes();
-  dc.barrier();
-  check_vertex_values(dg, VVAL);
-  dc.barrier();    
- 
- 
- 
-  ++EVAL;
-  
-  std::cout << "Testing synchronous edge pushing" << std::endl;
-  set_all_edges_to_value(dg, EVAL);
-  dg.push_all_owned_edges_to_replicas();
-  dc.barrier();
-  check_edge_values(dg, EVAL);
-  dc.barrier();
-  
-  ++EVAL;  
-  
-  std::cout << "Testing asynchronous edge pushing" << std::endl;
-  set_all_edges_to_value(dg, EVAL);
-  dg.push_all_owned_edges_to_replicas();
-  dg.wait_for_all_async_pushes();
-  dc.barrier();
-  check_edge_values(dg, EVAL);
-  dc.barrier();    
-
-  std::cout << "Ghost data modified. Test if remote owned data are updated" << std::endl;
-  std::cout << "==========================================================" << std::endl;
-
-  std::cout << "Testing Synchronous Scope sync with ghost changes. " << std::endl;
-  ++EVAL;
-  ++VVAL;
-  if (dc.procid() == 0) {
-    set_all_in_boundary(dg, VVAL, EVAL);
-    dg.synchronize_all_scopes();
-  }
-  dc.barrier();
-  if (dc.procid() == 1) {
-    boundary_has_at_least_one_match(dg, VVAL, EVAL);
-    dg.synchronize_all_scopes();
-  }
-  dc.barrier();
-
-
-  std::cout << "Testing Synchronous Vertex/Edge sync with ghost changes. " << std::endl;
-  ++EVAL;
-  ++VVAL;
-  if (dc.procid() == 1) {
-    set_all_in_boundary(dg, VVAL, EVAL);
-    dg.synchronize_all_vertices();
-    dg.synchronize_all_edges();
-  }
-  dc.barrier();
-  if (dc.procid() == 0) {
-    boundary_has_at_least_one_match(dg, VVAL, EVAL);
-    dg.synchronize_all_scopes();
-  }
-  dc.barrier();
-
-
-
-  std::cout << "Testing Asynchronous Scope sync with ghost changes. " << std::endl;
-  ++EVAL;
-  ++VVAL;
-  if (dc.procid() == 0) {
-    set_all_in_boundary(dg, VVAL, EVAL);
-    dg.synchronize_all_scopes(true);
-    dg.wait_for_all_async_syncs();
-  }
-  dc.barrier();
-  if (dc.procid() == 1) {
-    boundary_has_at_least_one_match(dg, VVAL, EVAL);
-    dg.synchronize_all_scopes();
-  }
-  dc.barrier();
-
-
-  std::cout << "Testing Asynchronous Vertex/Edge sync with ghost changes. " << std::endl;
-  ++EVAL;
-  ++VVAL;
-  if (dc.procid() == 1) {
-    set_all_in_boundary(dg, VVAL, EVAL);
-    dg.synchronize_all_vertices(true);
-    dg.synchronize_all_edges(true);
-    dg.wait_for_all_async_syncs();
-  }
-  dc.barrier();
-  if (dc.procid() == 0) {
-    boundary_has_at_least_one_match(dg, VVAL, EVAL);
-    dg.synchronize_all_scopes();
-  }
-  dc.barrier();
-  
-}
-
-void print_usage() {
-  std::cout << "Tests distributed graph\n";
-  std::cout << "First run ./distributed_graph_test -g to generate the test graph\n";
-  std::cout << "Then run distributed_graph_test -b with exactly 2 MPI nodes to test\n";
-  std::cout << "     (ex: mpiexec -n 2 ./distributed_graph_test -b)\n";
-}
 
 int main(int argc, char** argv) {
-  if (argc != 2) {
-    print_usage();
-    return 0;
-  }
-  
-  if (std::string(argv[1]) == "-g") {
-    generate_atoms(); 
-    return 0;
-  }
-  else if (std::string(argv[1]) != "-b") {
-    print_usage();
-    return 0;
-  }
   graphlab::mpi_tools::init(argc, argv);
-  
-  dc_init_param param;
-  ASSERT_TRUE(init_param_from_mpi(param));
-  ASSERT_EQ(param.machines.size(), 2);
-  global_logger().set_log_level(LOG_DEBUG);
+  global_logger().set_log_level(LOG_INFO);
 
-  distributed_control dc(param);
+  graphlab::distributed_control dc;
+  graph_type g(dc);
 
-  dc.barrier();
-  typedef distributed_graph<size_t, double> graph_type;
-  graph_type dg(dc, "atom_ne.idx");
+  std::cout << "-----------Begin Grid Test: Object Accessors--------------------" << std::endl;
+  size_t dim = 3;
+  size_t num_vertices = 0;
+  size_t num_edge = 0;
+  typedef uint32_t vertex_id_type;
 
-  dc.barrier();
-  std::cout << "Constructed!" << std::endl;
 
-  ASSERT_EQ(dg.num_vertices(), 10000);
-  ASSERT_EQ(dg.num_edges(), 10000);
-  // everyone do a check on the local graph structure
-  typedef graph_type::vertex_id_type vertex_id_type;
-  typedef graph_type::edge_id_type edge_id_type;
-  
-  const std::vector<vertex_id_type>& localvertices = dg.owned_vertices();
-  std::set<edge_id_type> eids;
-  std::cout << "Checking Graph Structure..." << std::endl;
-  for (size_t v_ = 0; v_ < localvertices.size(); ++v_) {
-    vertex_id_type v = localvertices[v_];
-    // everything has one in and one out
-    ASSERT_EQ(dg.num_in_neighbors(v), 1);
-    ASSERT_EQ(dg.num_out_neighbors(v), 1);
-    // check find
-    std::pair<bool, edge_id_type> ret = dg.find(v, (v+1) % 10000);
-    ASSERT_TRUE(ret.first);
-
-    // check source and target
-    ASSERT_EQ(dg.source(ret.second), v);
-    ASSERT_EQ(dg.target(ret.second), (v+1) % 10000);
-
-    // check in edgeids
-    graph_type::edge_list_type delist = dg.in_edge_ids(v);
-    ASSERT_EQ(delist.size(), 1);
-    eids.insert(*delist.begin());
-    delist = dg.out_edge_ids(v);
-    ASSERT_EQ(delist.size(), 1);
-    eids.insert(*delist.begin());
+  // here we create dim * dim vertices.
+  for (size_t i = 0; i < dim * dim; ++i) {
+    // create the vertex data, randomizing the color
+    vertex_data vdata;
+    vdata.num_flips = 0;
+    // create the vertex
+    g.add_vertex(vertex_id_type(i), vdata);
+    ++num_vertices;
   }
 
-  std::cout << "Checking Graph Data..." << std::endl;
-  // check for data
-  for (size_t v_ = 0; v_ < localvertices.size(); ++v_) {
-    vertex_id_type v = localvertices[v_];
-    ASSERT_EQ(dg.get_vertex_data(v), v);
-    ASSERT_EQ(dg.get_edge_data(v, (v+1) % 10000), v);
-    if (dg.vertex_is_local(v)) {
-      ASSERT_EQ(dg.vertex_data(v), v);
+  // create the edges. The add_edge(i,j,edgedata) function creates
+  // an edge from i->j. with the edgedata attached.   edge_data edata;
+
+  for (size_t i = 0;i < dim; ++i) {
+    for (size_t j = 0;j < dim - 1; ++j) {
+      // add the horizontal edges in both directions
+      //
+      g.add_edge(dim * i + j, dim * i + j + 1, edge_data(dim*i+j, dim*i+j+1));
+      g.add_edge(dim * i + j + 1, dim * i + j, edge_data(dim*i+j+1, dim*i+j));
+
+      // add the vertical edges in both directions
+      g.add_edge(dim * j + i, dim * (j + 1) + i, edge_data(dim*j+i, dim*(j+1)+i));
+      g.add_edge(dim * (j + 1) + i, dim * j + i, edge_data(dim*(j+1)+i, dim*j+i));
+      num_edge += 4;
     }
   }
-  
-  std::cout << "Testing one way vertex collection..." << std::endl;
-  // check vertex collection routines
-  // each machine collects a different random subset
-  std::vector<vertex_id_type> vsubset_collect;
-  for (size_t i = 0;i < 100; ++i) {
-    vsubset_collect.push_back(rand() % 10000);
+
+  // the graph is now constructed
+  // we need to call finalize.
+  g.finalize();
+
+  printf("Test num_vertices()...\n");
+  ASSERT_EQ(g.num_vertices(), num_vertices);
+  printf("+ Pass test: num_vertices :)\n\n");
+
+  printf("Test num_edges()...\n");
+  ASSERT_EQ(g.num_edges(), num_edge);
+  printf("+ Pass test: num_edges :)\n\n");
+
+  // Symmetric graph: #inneighbor == outneighbor
+  printf("Test num_in_neighbors() == num_out_neighbors() ...\n");
+  for (size_t i = 0; i < num_vertices; ++i) {
+    ASSERT_EQ(g.vertex(i).num_in_edges(), g.vertex(i).num_out_edges());
   }
-  std::map<vertex_id_type, size_t> retv = dg.collect_vertex_subset_one_way(vsubset_collect);
-  // check the map
-  for (size_t i = 0;i < 100; ++i) {
-    ASSERT_TRUE(retv.find(vsubset_collect[i]) != retv.end());
-    ASSERT_EQ(retv[vsubset_collect[i]], vsubset_collect[i]);
-  }
-  
-  dc.barrier();
-  
-  std::cout << "Testing all vertex collection..." << std::endl;
-  // try collect all vertices
-  std::vector<size_t> allvertexdata = dg.collect_vertices(0);
-  if (dc.procid() == 0) {
-    ASSERT_EQ(allvertexdata.size(), 10000);
-    for (size_t i = 0;i < 10000; ++i) {
-      ASSERT_EQ(allvertexdata[i], i);
+  ASSERT_EQ(g.vertex(4).num_in_edges(), 4);
+  ASSERT_EQ(g.vertex(0).num_in_edges(), 2);
+  printf("+ Pass test: #in = #out...\n\n");
+
+
+  printf("Test iterate over in/out_edges and get edge data: \n");
+  for (vertex_id_type i = 0; i < num_vertices; ++i) {
+    local_vertex_type v = local_vertex_type(g.vertex(i));
+    const local_edge_list_type& out_edges = v.out_edges();
+    const local_edge_list_type& in_edges = v.in_edges();
+
+    printf("Test v: %u\n", i);
+    printf("In edge ids: ");
+    foreach(local_edge_type edge, in_edges)
+      std::cout << "(" << edge.data().from << ","
+                << edge.data().to << ") ";
+    std::cout <<std::endl;
+
+    printf("Out edge ids: ");
+    foreach(local_edge_type edge, out_edges)
+      std::cout << "(" << edge.data().from << ","
+                << edge.data().to << ") ";
+    std::cout <<std::endl;
+
+    foreach(local_edge_type edge, out_edges) {
+      edge_data edata = edge.data();
+      ASSERT_EQ(edge.source().global_id(), i);
+      ASSERT_EQ(edata.from, edge.source().global_id());
+      ASSERT_EQ(edata.to, edge.target().global_id());
+    }
+
+    foreach(local_edge_type edge, in_edges) {
+      edge_data edata = edge.data();
+      ASSERT_EQ(edge.target().global_id(), i);
+      ASSERT_EQ(edata.from, edge.source().global_id());
+      ASSERT_EQ(edata.to, edge.target().global_id());
     }
   }
-  else {
-    ASSERT_EQ(allvertexdata.size(), 0);
-  }
-  
-
-  
-  std::vector<edge_id_type> alledges;
-  std::copy(eids.begin(), eids.end(), std::back_inserter(alledges));
-  for (size_t e_ = 0; e_ < alledges.size(); ++e_) {
-    edge_id_type e = alledges[e_];
-    
-    ASSERT_EQ(dg.get_edge_data(e), dg.source(e));
-    ASSERT_EQ(dg.edge_data(e), dg.source(e));
-  }
-  dc.full_barrier();
-  sync_test(dg, dc);
-  graphlab::mpi_tools::finalize();
+  printf("+ Pass test: iterate edgelist and get data. :) \n");
+  std::cout << "-----------End Grid Test--------------------" << std::endl;
 }
+
+#include <graphlab/macros_undef.hpp>

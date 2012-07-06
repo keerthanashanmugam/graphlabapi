@@ -1,3 +1,14 @@
+/*
+-------------------------------------------------------------------------
+ CxxTest: A lightweight C++ unit testing library.
+ Copyright (c) 2008 Sandia Corporation.
+ This software is distributed under the LGPL License v2.1
+ For more information, see the COPYING file in the top CxxTest directory.
+ Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+ the U.S. Government retains certain rights in this software.
+-------------------------------------------------------------------------
+*/
+
 #ifndef __cxxtest__ValueTraits_h__
 #define __cxxtest__ValueTraits_h__
 
@@ -17,6 +28,12 @@
 #else // !_CXXTEST_OLD_TEMPLATE_SYNTAX
 #   define CXXTEST_TEMPLATE_INSTANTIATION template<>
 #endif // _CXXTEST_OLD_TEMPLATE_SYNTAX
+
+#ifdef _CXXTEST_HAVE_STD
+#include <cmath>
+#else
+#include <math.h>
+#endif
 
 namespace CxxTest 
 {
@@ -312,8 +329,12 @@ namespace CxxTest
     public:
         ValueTraits( double t ) 
         {
-            ( requiredDigitsOnLeft( t ) > MAX_DIGITS_ON_LEFT ) ?
-                hugeNumber( t ) :
+            //if ( ( t != t ) || ( t >= 1.0/0.0 ) || ( t == -1.0/0.0 ) )
+            if ( ( t != t ) || ( t >= HUGE_VAL ) || ( t == -HUGE_VAL ) )
+                nonFiniteNumber( t );
+            else if ( requiredDigitsOnLeft( t ) > MAX_DIGITS_ON_LEFT )
+                hugeNumber( t );
+            else
                 normalNumber( t );
         }
 
@@ -327,6 +348,7 @@ namespace CxxTest
         char *doNegative( double &t );
         void hugeNumber( double t );
         void normalNumber( double t );
+        void nonFiniteNumber( double t );
         char *doubleToString( double t, char *s, unsigned skip = 0, unsigned max = (unsigned)-1 );
     };
 
@@ -338,11 +360,13 @@ namespace CxxTest
     CXXTEST_COPY_TRAITS( const float, const double );
     CXXTEST_COPY_CONST_TRAITS( float );
 #endif // !CXXTEST_USER_VALUE_TRAITS
-};
+}
 
 #ifdef _CXXTEST_HAVE_STD
 #   include <cxxtest/StdValueTraits.h>
 #endif // _CXXTEST_HAVE_STD
+
+namespace dummy_enum_ns {}
 
 //
 // CXXTEST_ENUM_TRAITS
@@ -369,7 +393,7 @@ namespace CxxTest
                 } \
             } \
         }; \
-    }
+    } using namespace dummy_enum_ns
 
 #define CXXTEST_ENUM_MEMBER( MEMBER ) \
     case MEMBER: return #MEMBER;

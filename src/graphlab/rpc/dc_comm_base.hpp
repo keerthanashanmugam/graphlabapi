@@ -36,6 +36,8 @@ namespace dc_impl {
 
   
 /**
+ * \ingroup rpc
+ * \internal
 The base class of all comms implementations
 */
 class dc_comm_base {
@@ -85,6 +87,8 @@ class dc_comm_base {
   
   virtual size_t network_bytes_sent() const = 0;
   virtual size_t network_bytes_received() const = 0;
+  virtual size_t send_queue_length() const = 0;
+
 };
 
 } // namespace dc_impl

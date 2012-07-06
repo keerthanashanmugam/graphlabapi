@@ -46,7 +46,8 @@ void on_receive_event(int fd, short ev, void* arg);
 void on_send_event(int fd, short ev, void* arg);
 
 /**
- \ingroup rpc_internal
+ \ingroup rpc
+ \internal
 TCP implementation of the communications subsystem.
 Provides a single object interface to sending/receiving data streams to
 a collection of machines.
@@ -127,7 +128,12 @@ class dc_tcp_comm:public dc_comm_base {
     return network_bytesreceived.value;
   }
  
-  
+  inline size_t send_queue_length() const {
+    size_t a = network_bytessent.value;
+    size_t b = buffered_len.value;
+    return b - a;
+  }
+ 
   /**
    Sends the string of length len to the target machine dest.
    Only valid after call to init();
@@ -171,7 +177,7 @@ class dc_tcp_comm:public dc_comm_base {
   
   std::vector<dc_receive*> receiver;
   std::vector<dc_send*> sender;
-
+  atomic<size_t> buffered_len;
   
  
   
@@ -192,6 +198,9 @@ class dc_tcp_comm:public dc_comm_base {
     circular_iovec_buffer outvec;  /// outgoing data
     struct msghdr data; 
   };
+
+  mutex insock_lock; /// locks the insock field in socket_info
+  conditional insock_cond; /// triggered when the insock field in socket_info changes
   
   struct timeout_event {
     size_t sockstart;
@@ -211,7 +220,8 @@ class dc_tcp_comm:public dc_comm_base {
   void send_all(socket_info& sockinfo);
   bool send_till_block(socket_info& sockinfo);
   void check_for_new_data(socket_info& sockinfo);
-  void construct_events(size_t sockets_per_thread = 4);
+  void construct_events(size_t send_sockets_per_thread = 64,
+                        size_t recv_sockets_per_thread = 64);
   
 
   // counters

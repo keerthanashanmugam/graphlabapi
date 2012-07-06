@@ -1,4 +1,4 @@
-/**  
+/*  
  * Copyright (c) 2009 Carnegie Mellon University. 
  *     All rights reserved.
  *
@@ -37,20 +37,28 @@
 //#include <graphlab/logger/assertions.hpp>
 #include <graphlab/util/stl_util.hpp>
 #include <graphlab/util/net_util.hpp>
-#include <graphlab/metrics/metrics.hpp>
+#include <graphlab/util/mpi_tools.hpp>
 
 #include <graphlab/rpc/dc.hpp>
 #include <graphlab/rpc/dc_tcp_comm.hpp>
 //#include <graphlab/rpc/dc_sctp_comm.hpp>
-
-#include <graphlab/rpc/dc_stream_receive.hpp>
 #include <graphlab/rpc/dc_buffered_stream_send2.hpp>
+#include <graphlab/rpc/dc_stream_receive.hpp>
 #include <graphlab/rpc/reply_increment_counter.hpp>
 #include <graphlab/rpc/dc_services.hpp>
+
+#include <graphlab/rpc/dc_init_from_env.hpp>
+#include <graphlab/rpc/dc_init_from_mpi.hpp>
 
 namespace graphlab {
 
 namespace dc_impl {
+
+static procid_t last_dc_procid = 0;
+
+procid_t get_last_dc_procid() {
+  return last_dc_procid;
+}
 
 
 bool thrlocal_resizing_array_key_initialized = false;
@@ -95,7 +103,7 @@ void thrlocal_destructor(void* v){
   }
   pthread_setspecific(thrlocal_resizing_array_key, NULL);
 }
-}
+} // namespace dc_impl
 
 unsigned char distributed_control::set_sequentialization_key(unsigned char newkey) {
   size_t oldval = reinterpret_cast<size_t>(pthread_getspecific(dc_impl::thrlocal_sequentialization_key));
@@ -119,25 +127,59 @@ unsigned char distributed_control::get_sequentialization_key() {
   return (unsigned char)oldval;
 }
 
-static std::string get_working_dir() {
-#ifdef _GNU_SOURCE
-  char* path = get_current_dir_name();
-  assert(path != NULL);
-  std::string ret = path;
-  free(path);
-#else
-  char path[MAXPATHLEN];
-  assert(getcwd(path, MAXPATHLEN) != NULL);
-  std::string ret = path;
-#endif
-  return ret;
+
+distributed_control::distributed_control() {
+  dc_init_param initparam;
+  if (init_param_from_env(initparam)) {
+    logstream(LOG_INFO) << "Distributed Control Initialized from Environment" << std::endl;
+  } else if (mpi_tools::initialized() && init_param_from_mpi(initparam)) {
+      logstream(LOG_INFO) << "Distributed Control Initialized from MPI" << std::endl;
+  }
+  else {
+    logstream(LOG_INFO) << "Shared Memory Execution" << std::endl;
+    // get a port and socket
+    std::pair<size_t, int> port_and_sock = get_free_tcp_port();
+    size_t port = port_and_sock.first;
+    int sock = port_and_sock.second;
+
+    initparam.machines.push_back(std::string("localhost:") + tostr(port));
+    initparam.curmachineid = 0;
+    initparam.initstring = std::string(" __sockhandle__=") + tostr(sock) + " ";
+    initparam.numhandlerthreads = RPC_DEFAULT_NUMHANDLERTHREADS;
+    initparam.commtype = RPC_DEFAULT_COMMTYPE;
+  }
+  init(initparam.machines, 
+        initparam.initstring, 
+        initparam.curmachineid, 
+        initparam.numhandlerthreads,
+        initparam.commtype);
+  INITIALIZE_TRACER(dc_receive_queuing, "dc: time spent on enqueue");
+  INITIALIZE_TRACER(dc_receive_multiplexing, "dc: time spent exploding a chunk");
+  INITIALIZE_TRACER(dc_call_dispatch, "dc: time spent issuing RPC calls");
 }
 
+distributed_control::distributed_control(dc_init_param initparam) {
+  init(initparam.machines, 
+        initparam.initstring, 
+        initparam.curmachineid, 
+        initparam.numhandlerthreads,
+        initparam.commtype);
+  INITIALIZE_TRACER(dc_receive_queuing, "dc: time spent on enqueue");
+  INITIALIZE_TRACER(dc_receive_multiplexing, "dc: time spent exploding a chunk");
+  INITIALIZE_TRACER(dc_call_dispatch, "dc: time spent issuing RPC calls");
+}
+
+
 distributed_control::~distributed_control() {
-  PERMANENT_DESTROY_DIST_EVENT_LOG(eventlog);
   distributed_services->full_barrier();
   logstream(LOG_INFO) << "Shutting down distributed control " << std::endl;
-  
+  FREE_CALLBACK_EVENT(EVENT_NETWORK_BYTES);
+  FREE_CALLBACK_EVENT(EVENT_RPC_CALLS);  
+  // call all deletion callbacks
+  for (size_t i = 0; i < deletion_callbacks.size(); ++i) {
+    deletion_callbacks[i]();
+  }
+
   size_t bytessent = bytes_sent();
   for (size_t i = 0;i < senders.size(); ++i) {
     senders[i]->flush();
@@ -201,6 +243,7 @@ void distributed_control::deferred_function_call_chunk(char* buf, size_t len, pr
   fc->chunk_ref_counter = NULL;
   fc->is_chunk = true;
   fc->source = src;
+  fcallqueue_length.inc();
   fcallqueue[src % fcallqueue.size()].enqueue(fc);
   END_TRACEPOINT(dc_receive_queuing);
 }
@@ -209,6 +252,7 @@ void distributed_control::deferred_function_call_chunk(char* buf, size_t len, pr
 void distributed_control::process_fcall_block(fcallqueue_entry &fcallblock) {
   if (fcallblock.is_chunk == false) {
     for (size_t i = 0;i < fcallblock.calls.size(); ++i) {
+      fcallqueue_length.dec();
       exec_function_call(fcallblock.source, fcallblock.calls[i].packet_mask,
                         fcallblock.calls[i].data, fcallblock.calls[i].len);
     }
@@ -220,10 +264,19 @@ void distributed_control::process_fcall_block(fcallqueue_entry &fcallblock) {
     }
   }
   else {
+    fcallqueue_length.dec();
     BEGIN_TRACEPOINT(dc_receive_multiplexing);
     fcallqueue_entry* queuebufs[fcallqueue.size()];
     atomic<size_t>* refctr = new atomic<size_t>(0);
-    
+
+    fcallqueue_entry immediate_queue;
+
+    immediate_queue.chunk_src = fcallblock.chunk_src;
+    immediate_queue.chunk_ref_counter = refctr;
+    immediate_queue.chunk_len = 0;
+    immediate_queue.source = fcallblock.source;
+    immediate_queue.is_chunk = false;
+
     for (size_t i = 0;i < fcallqueue.size(); ++i) {
       queuebufs[i] = new fcallqueue_entry;
       queuebufs[i]->chunk_src = fcallblock.chunk_src;
@@ -236,32 +289,40 @@ void distributed_control::process_fcall_block(fcallqueue_entry &fcallblock) {
     //parse the data in fcallblock.data
     char* data = fcallblock.chunk_src;
     size_t remaininglen = fcallblock.chunk_len;
-    PERMANENT_ACCUMULATE_DIST_EVENT(eventlog, BYTES_EVENT, remaininglen);
+    //PERMANENT_ACCUMULATE_DIST_EVENT(eventlog, BYTES_EVENT, remaininglen);
     size_t stripe = 0;
     while(remaininglen > 0) {
       ASSERT_GE(remaininglen, sizeof(dc_impl::packet_hdr));
       dc_impl::packet_hdr hdr = *reinterpret_cast<dc_impl::packet_hdr*>(data);
       ASSERT_LE(hdr.len, remaininglen);
       
-      if ((hdr.packet_type_mask & CONTROL_PACKET) == 0) {
-        global_bytes_received[hdr.src].inc(hdr.len);
-      }
       refctr->value++;
-      if (hdr.sequentialization_key == 0) {
-        queuebufs[stripe]->calls.push_back(function_call_block(
+
+
+      if ((hdr.packet_type_mask & CONTROL_PACKET)) {
+        // control calls are handled immediately with priority.
+        immediate_queue.calls.push_back(function_call_block(
                                             data + sizeof(dc_impl::packet_hdr), 
                                             hdr.len,
                                             hdr.packet_type_mask));
-        ++stripe;
-        if (stripe == (fcallblock.source % fcallqueue.size())) ++stripe;
-        if (stripe >= fcallqueue.size()) stripe -= fcallqueue.size();
-      }
-      else {
-        size_t idx = (hdr.sequentialization_key % (fcallqueue.size()));
-        queuebufs[idx]->calls.push_back(function_call_block(
-                                            data + sizeof(dc_impl::packet_hdr), 
-                                            hdr.len,
-                                            hdr.packet_type_mask));
+      } else {
+        global_bytes_received[hdr.src].inc(hdr.len);
+        if (hdr.sequentialization_key == 0) {
+          queuebufs[stripe]->calls.push_back(function_call_block(
+                                              data + sizeof(dc_impl::packet_hdr), 
+                                              hdr.len,
+                                              hdr.packet_type_mask));
+          ++stripe;
+          if (stripe == (fcallblock.source % fcallqueue.size())) ++stripe;
+          if (stripe >= fcallqueue.size()) stripe -= fcallqueue.size();
+        }
+        else {
+          size_t idx = (hdr.sequentialization_key % (fcallqueue.size()));
+          queuebufs[idx]->calls.push_back(function_call_block(
+                                              data + sizeof(dc_impl::packet_hdr), 
+                                              hdr.len,
+                                              hdr.packet_type_mask));
+        }
       }
       data += sizeof(dc_impl::packet_hdr) + hdr.len;
       remaininglen -= sizeof(dc_impl::packet_hdr) + hdr.len;
@@ -270,6 +331,7 @@ void distributed_control::process_fcall_block(fcallqueue_entry &fcallblock) {
     BEGIN_TRACEPOINT(dc_receive_queuing);
     for (size_t i = 0;i < fcallqueue.size(); ++i) { 
       if (queuebufs[i]->calls.size() > 0) {
+        fcallqueue_length.inc(queuebufs[i]->calls.size());
         fcallqueue[i].enqueue(queuebufs[i]);
       }
       else {
@@ -277,18 +339,62 @@ void distributed_control::process_fcall_block(fcallqueue_entry &fcallblock) {
       }
     }
     END_TRACEPOINT(dc_receive_queuing);
+    if (immediate_queue.calls.size() > 0) process_fcall_block(immediate_queue);
+  }
+}
+
+void distributed_control::stop_handler_threads(size_t threadid,
+                                                size_t total_threadid) {
+  for (size_t i = threadid;i < fcallqueue.size(); i += total_threadid) {
+    fcallqueue[i].stop_blocking();
+    while (fcall_handler_active[i]) usleep(1);
+  }
+}
+
+void distributed_control::stop_handler_threads_no_wait(size_t threadid,
+                                                       size_t total_threadid) {
+  for (size_t i = threadid;i < fcallqueue.size(); i += total_threadid) {
+    fcallqueue[i].stop_blocking();
+  }
+}
+
+
+void distributed_control::start_handler_threads(size_t threadid,
+                                                size_t total_threadid) {
+  for (size_t i = threadid;i < fcallqueue.size(); i += total_threadid) fcallqueue[i].start_blocking();
+  for (size_t i = threadid;i < fcallqueue.size(); i += total_threadid) {
+    fcallhandlers.launch(boost::bind(&distributed_control::fcallhandler_loop,
+                                      this, i));
+  }
+}
+
+void distributed_control::handle_incoming_calls(size_t threadid,
+                                                size_t total_threadid) {
+  for (size_t i = threadid;i < fcallqueue.size(); i += total_threadid) {
+    if (fcallqueue[i].empty_unsafe() == false) {
+      std::deque<fcallqueue_entry*> q;
+      fcallqueue[i].swap(q);
+      while (!q.empty()) {
+        fcallqueue_entry* entry;
+        entry = q.front();
+        q.pop_front();
+
+        process_fcall_block(*entry);
+        delete entry;
+      }
+    }
   }
 }
 
 void distributed_control::fcallhandler_loop(size_t id) {
   // pop an element off the queue
-//  float t = lowres_time_seconds();
+//  float t = timer::approx_time_seconds();
+  fcall_handler_active[id].inc();
   while(1) {
     fcallqueue[id].wait_for_data();
     if (fcallqueue[id].is_alive() == false) break;
     std::deque<fcallqueue_entry*> q;
     fcallqueue[id].swap(q);
-
     while (!q.empty()) {
       fcallqueue_entry* entry;
       entry = q.front();
@@ -299,6 +405,7 @@ void distributed_control::fcallhandler_loop(size_t id) {
     }
     //  std::cerr << "Handler " << id << " died." << std::endl;
   }
+  fcall_handler_active[id].dec();
 }
   
 
@@ -325,8 +432,9 @@ void distributed_control::init(const std::vector<std::string> &machines,
             procid_t curmachineid,
             size_t numhandlerthreads,
             dc_comm_type commtype) {
-  rpc_metrics = metrics("RPC");
-  
+  ASSERT_MSG(machines.size() <= RPC_MAX_N_PROCS, 
+             "Number of processes exceeded hard limit of %d", RPC_MAX_N_PROCS);
+    
   // initialize thread local storage
   if (dc_impl::thrlocal_resizing_array_key_initialized == false) {
     dc_impl::thrlocal_resizing_array_key_initialized = true;
@@ -359,7 +467,6 @@ void distributed_control::init(const std::vector<std::string> &machines,
 
   if (commtype == TCP_COMM) {
     comm = new dc_impl::dc_tcp_comm();
-    std::cerr << "TCP Communication layer constructed." << std::endl;
   }
 /*  else if (commtype == SCTP_COMM) {
     #ifdef HAS_SCTP
@@ -373,7 +480,7 @@ void distributed_control::init(const std::vector<std::string> &machines,
     ASSERT_MSG(false, "Unexpected value for comm type");
   }
   // create the receiving objects
-  if (comm->capabilities() && dc_impl::COMM_STREAM) {
+  if (comm->capabilities() & dc_impl::COMM_STREAM) {
     for (procid_t i = 0; i < machines.size(); ++i) {
       receivers.push_back(new dc_impl::dc_stream_receive(this, i));
       senders.push_back(new dc_impl::dc_buffered_stream_send2(this, comm, i));
@@ -381,6 +488,9 @@ void distributed_control::init(const std::vector<std::string> &machines,
   }
   // create the handler threads
   // store the threads in the threadgroup
+  fcall_handler_active.resize(numhandlerthreads);
+  
+  fcallhandlers.resize(numhandlerthreads);
   for (size_t i = 0;i < numhandlerthreads; ++i) {
     fcallhandlers.launch(boost::bind(&distributed_control::fcallhandler_loop, 
                                       this, i));
@@ -390,38 +500,29 @@ void distributed_control::init(const std::vector<std::string> &machines,
   // set the local proc values
   localprocid = curmachineid;
   localnumprocs = machines.size();
+
+  // set the static variable for the global function get_last_dc_procid()
+  dc_impl::last_dc_procid = localprocid;
   
   // construct the services
   distributed_services = new dc_services(*this);
-  
   // start the machines
   comm->init(machines, options, curmachineid, 
-              receivers, senders); 
-
-  compute_master_ranks();
+              receivers, senders);
+  std::cerr << "TCP Communication layer constructed." << std::endl;
+  barrier();
+  // initialize the empty stream
+  nullstrm.open(boost::iostreams::null_sink());
   
-#ifdef USE_EVENT_LOG
-    PERMANENT_INITIALIZE_DIST_EVENT_LOG(eventlog, *this, std::cout, 3000, dist_event_log::RATE_BAR);
-#else
-    PERMANENT_INITIALIZE_DIST_EVENT_LOG(eventlog, *this, std::cout, 3000, dist_event_log::LOG_FILE);
-#endif
-    PERMANENT_ADD_DIST_EVENT_TYPE(eventlog, CALLS_EVENT, "Total RPC Calls");
-    PERMANENT_ADD_DIST_EVENT_TYPE(eventlog, BYTES_EVENT, "Total Bytes Communicated");
+  // initialize the event log
 
+  INITIALIZE_EVENT_LOG(*this);
+  ADD_CUMULATIVE_CALLBACK_EVENT(EVENT_NETWORK_BYTES, "Network Utilization", 
+      "MB", boost::bind(&distributed_control::network_megabytes_sent, this));
+  ADD_CUMULATIVE_CALLBACK_EVENT(EVENT_RPC_CALLS, "RPC Calls", 
+      "Calls", boost::bind(&distributed_control::calls_sent, this));
 }
 
-size_t distributed_control::set_sender_option(std::string opt, size_t value) {
-  size_t oldval = 0;
-  // we assume that all senders are identical
-  for (size_t i = 0;i < senders.size(); ++i) {
-    oldval = senders[i]->set_option(opt, value);
-  }
-  return oldval;
-}
-
-dc_services& distributed_control::services() {
-  return *distributed_services;
-}
 
 
 void distributed_control::barrier() {
@@ -434,20 +535,6 @@ void distributed_control::flush() {
   }
 }
 
-
-void distributed_control::compute_master_ranks() {
-  uint32_t local_ip = get_local_ip();
-  std::string localipandpath = tostr(local_ip) + get_working_dir();
-  std::vector<std::string> ipandpath(numprocs());
-  ipandpath[procid()] = localipandpath;
-  all_gather(ipandpath);
-  for(procid_t i = 0; i < ipandpath.size(); ++i) {
-    if(ipandpath[i] == localipandpath) {
-      masterid = i;
-      break;
-    }
-  }
-}
 
  /*****************************************************************************
                       Implementation of Full Barrier
@@ -516,41 +603,6 @@ void distributed_control::full_barrier() {
 //   }
 }
 
-std::map<std::string, size_t> distributed_control::gather_statistics(){
-    std::map<std::string, size_t> ret;
-
-    std::vector<collected_statistics> stats(numprocs());
-    stats[procid()].callssent = calls_sent();
-    stats[procid()].bytessent = bytes_sent();
-    stats[procid()].network_bytessent = network_bytes_sent();
-    gather(stats, 0, true);
-    if (procid() == 0) {
-      collected_statistics cs;
-      for (size_t i = 0;i < numprocs(); ++i) {
-        cs.callssent += stats[i].callssent;
-        cs.bytessent += stats[i].bytessent;
-        rpc_metrics.set_vector_entry_integer("calls_sent", i, stats[i].callssent);
-        rpc_metrics.set_vector_entry_integer("bytes_sent", i, stats[i].bytessent);
-        rpc_metrics.set_vector_entry_integer("network_bytes_sent", i, stats[i].network_bytessent);
-        cs.network_bytessent += stats[i].network_bytessent;
-      }
-      ret["total_calls_sent"] = cs.callssent;
-      ret["total_bytes_sent"] = cs.bytessent;
-      ret["network_bytes_sent"] = cs.network_bytessent;
-    }
-    return ret; 
-}
-
-void distributed_control::fill_metrics() {
-  std::map<std::string, size_t> ret = gather_statistics();
-  if (procid() == 0) {
-    rpc_metrics.set_integer("nodes", numprocs());
-    rpc_metrics.set_integer("total_calls_sent", ret["total_calls_sent"]);
-    rpc_metrics.set_integer("total_bytes_sent", ret["total_bytes_sent"]);
-    rpc_metrics.set_integer("total_network_bytes_sent", ret["network_bytes_sent"]);
-  }
-  total_bytes_sent = ret["total_bytes_sent"];
-}
 
 } //namespace graphlab
 

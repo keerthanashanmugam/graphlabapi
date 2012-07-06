@@ -37,7 +37,7 @@
 #include <iostream>
 #include <boost/function.hpp>
 #include <graphlab/logger/assertions.hpp>
-#include <graphlab/parallel/atomic.hpp>
+#include <graphlab/parallel/atomic_ops.hpp>
 #include <graphlab/util/generics/any.hpp>
 #include <graphlab/util/branch_hints.hpp>
 #include <boost/unordered_map.hpp>
@@ -45,65 +45,13 @@
 #define _POSIX_SPIN_LOCKS -1
 
 
+#include <graphlab/parallel/mutex.hpp>
+
 
 
 
 namespace graphlab {
 
-  /**
-   * \ingroup util
-   *
-   * Simple wrapper around pthread's mutex.
-   * Before you use, see \ref parallel_object_intricacies.
-   */
-  template< size_t spin_count = 0 >
-  class adaptive_mutex {
-  private:
-    // mutable not actually needed
-    mutable pthread_mutex_t m_mut;
-  public:
-    /// constructs a mutex
-    adaptive_mutex() {
-      int error = pthread_mutex_init(&m_mut, NULL);
-      ASSERT_TRUE(!error);
-    }
-    
-    /** Copy constructor which does not copy. Do not use!
-        Required for compatibility with some STL implementations (LLVM).
-        which use the copy constructor for vector resize, 
-        rather than the standard constructor.    */
-    adaptive_mutex(const adaptive_mutex&) {
-      int error = pthread_mutex_init(&m_mut, NULL);
-      ASSERT_TRUE(!error);
-    }
-
-    // not copyable
-    void operator=(const adaptive_mutex& m) { }
-    
-    /// Acquires a lock on the mutex
-    inline void lock() const {
-      for(size_t i = 0; i < spin_count; ++i) { if(try_lock()) return; }
-      int error = pthread_mutex_lock( &m_mut  );
-      // if (error) std::cout << "mutex.lock() error: " << error << std::endl;
-      ASSERT_TRUE(!error);
-    }
-    /// Releases a lock on the mutex
-    inline void unlock() const {
-      int error = pthread_mutex_unlock( &m_mut );
-      ASSERT_TRUE(!error);
-    }
-    /// Non-blocking attempt to acquire a lock on the mutex
-    inline bool try_lock() const {
-      return pthread_mutex_trylock( &m_mut ) == 0;
-    }
-    ~adaptive_mutex(){
-      int error = pthread_mutex_destroy( &m_mut );
-      ASSERT_TRUE(!error);
-    }
-    friend class conditional;
-  }; // End of Adaptive_Mutex
-  
-  typedef adaptive_mutex<0> mutex;
 
 
 
@@ -252,22 +200,60 @@ namespace graphlab {
       ASSERT_TRUE(!error);
     }
     /// Like wait() but with a time limit of "sec" seconds
-    inline int timedwait(const mutex& mut, int sec) const {
+    inline int timedwait(const mutex& mut, size_t sec) const {
       struct timespec timeout;
       struct timeval tv;
       struct timezone tz;
       gettimeofday(&tv, &tz);
-      timeout.tv_nsec = 0;
-      timeout.tv_sec = tv.tv_sec + sec;
+      timeout.tv_nsec = tv.tv_usec * 1000;
+      timeout.tv_sec = tv.tv_sec + (time_t)sec;
       return pthread_cond_timedwait(&m_cond, &mut.m_mut, &timeout);
     }
-    /// Like wait() but with a time limit of "ns" nanoseconds
-    inline int timedwait_ns(const mutex& mut, int ns) const {
+    /// Like wait() but with a time limit of "ms" milliseconds
+    inline int timedwait_ms(const mutex& mut, size_t ms) const {
       struct timespec timeout;
       struct timeval tv;
       gettimeofday(&tv, NULL);
-      timeout.tv_nsec = (tv.tv_usec * 1000 + ns) % 1000000000;
-      timeout.tv_sec = tv.tv_sec + (tv.tv_usec * 1000 + ns >= 1000000000);
+      // convert ms to s and ns
+      size_t s = ms / 1000;
+      ms = ms % 1000;
+      size_t ns = ms * 1000000;
+      // convert timeval to timespec
+      timeout.tv_nsec = tv.tv_usec * 1000;
+      timeout.tv_sec = tv.tv_sec;
+      
+      // add the time
+      timeout.tv_nsec += (suseconds_t)ns;
+      timeout.tv_sec += (time_t)s;
+      // shift the nsec to sec if overflow
+      if (timeout.tv_nsec > 1000000000) {
+        timeout.tv_sec ++;
+        timeout.tv_nsec -= 1000000000;
+      }
+      return pthread_cond_timedwait(&m_cond, &mut.m_mut, &timeout);
+    }
+    /// Like wait() but with a time limit of "ns" nanoseconds
+    inline int timedwait_ns(const mutex& mut, size_t ns) const {
+      struct timespec timeout;
+      struct timeval tv;
+      gettimeofday(&tv, NULL);
+      assert(ns > 0);
+      // convert ns to s and ns
+      size_t s = ns / 1000000;
+      ns = ns % 1000000;
+
+      // convert timeval to timespec
+      timeout.tv_nsec = tv.tv_usec * 1000;
+      timeout.tv_sec = tv.tv_sec;
+      
+      // add the time
+      timeout.tv_nsec += (suseconds_t)ns;
+      timeout.tv_sec += (time_t)s;
+      // shift the nsec to sec if overflow
+      if (timeout.tv_nsec > 1000000000) {
+        timeout.tv_sec ++;
+        timeout.tv_nsec -= 1000000000;
+      }
       return pthread_cond_timedwait(&m_cond, &mut.m_mut, &timeout);
     }
     /// Signals one waiting thread to wake up
@@ -554,6 +540,10 @@ namespace graphlab {
 
     // not copyable
     void operator=(const cancellable_barrier& m) { }
+
+    void resize_unsafe(size_t numthreads) {
+      needed = numthreads;
+    }
     
     /**
      * \warning: This barrier is safely NOT reusable with this cancel
@@ -610,6 +600,10 @@ namespace graphlab {
       pthread_barrier_init(&m_barrier, NULL, (unsigned)numthreads); }    
     // not copyable
     void operator=(const barrier& m) { }
+    void resize_unsafe(size_t numthreads) {
+      pthread_barrier_destroy(&m_barrier);
+      pthread_barrier_init(&m_barrier, NULL, (unsigned)numthreads);
+    }
     ~barrier() { pthread_barrier_destroy(&m_barrier); }
     /// Wait on the barrier until numthreads has called wait
     inline void wait() const { pthread_barrier_wait(&m_barrier); }

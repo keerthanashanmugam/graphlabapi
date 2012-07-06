@@ -1,5 +1,13 @@
 project(GraphLab)
 
+#link_libraries(${Boost_LIBRARIES})
+#link_libraries(${GraphLab_LIBRARIES})
+
+
+
+
+
+
 macro(add_all_subdirectories retval curdir)
   file(GLOB sub-dir RELATIVE ${curdir} *)
   set(list_of_dirs "")
@@ -16,12 +24,8 @@ macro(add_all_subdirectories retval curdir)
   endforeach()
   set(${retval} ${list_of_dirs})
 endmacro()
-
-add_all_subdirectories(retval, ${CMAKE_CURRENT_SOURCE_DIR})
-
-
+# disabling for branch
+#add_all_subdirectories(retval, ${CMAKE_CURRENT_SOURCE_DIR})
 
 
-
-
-
+add_subdirectory(dist_pagerank)

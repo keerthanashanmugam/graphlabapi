@@ -1,89 +1,66 @@
-/**  
- * Copyright (c) 2009 Carnegie Mellon University. 
- *     All rights reserved.
- *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an "AS
- *  IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
- *  express or implied.  See the License for the specific language
- *  governing permissions and limitations under the License.
- *
- * For more about this software visit:
- *
- *      http://www.graphlab.ml.cmu.edu
- *
- */
-
-
 #ifndef GRAPHLAB_PARALLEL_LOCKFREE_PUSHBACK_HPP
 #define GRAPHLAB_PARALLEL_LOCKFREE_PUSHBACK_HPP
 #include <graphlab/parallel/atomic.hpp>
 
 namespace graphlab {
 
-  namespace lockfree_push_back_impl {
-    struct idx_ref {
-      idx_ref(): reference_count(0), idx(0) { }
-      idx_ref(size_t idx): reference_count(0), idx(idx) { }
+namespace lockfree_push_back_impl {
+  struct idx_ref {
+    idx_ref(): reference_count(0), idx(0) { }
+    idx_ref(size_t idx): reference_count(0), idx(idx) { }
     
-      volatile int reference_count;
-      atomic<size_t> idx;
-      enum {
-        MAX_REF = 65536
-      };
-    
-      inline void inc_ref() {
-        while (1) {
-          int curref = reference_count;
-          if ((curref & MAX_REF) == 0 &&
-              atomic_compare_and_swap(reference_count, curref, curref + 1)) {
-            break;
-          }
-        }      
-      }
-
-      inline void wait_till_no_ref() {
-        while((reference_count & (MAX_REF - 1)) != 0);
-      }
-    
-      inline void dec_ref() {
-        __sync_fetch_and_sub(&reference_count, 1);
-      }
-
-      inline void flag_ref() {
-        __sync_fetch_and_xor(&reference_count, MAX_REF);
-      }
-    
-      inline size_t inc_idx() {
-        return idx.inc_ret_last();
-      }
-
-      inline size_t inc_idx(size_t n) {
-        return idx.inc_ret_last(n);
-      }
+    volatile int reference_count;
+    atomic<size_t> idx;
+    enum {
+      MAX_REF = 65536
     };
-  } // lockfree_push_back_impl
+    
+    inline void inc_ref() {
+      while (1) {
+        int curref = reference_count;
+        if ((curref & MAX_REF) == 0 &&
+            atomic_compare_and_swap(reference_count, curref, curref + 1)) {
+          break;
+        }
+      }      
+    }
+
+    inline void wait_till_no_ref() {
+      while((reference_count & (MAX_REF - 1)) != 0);
+    }
+    
+    inline void dec_ref() {
+      __sync_fetch_and_sub(&reference_count, 1);
+    }
+
+    inline void flag_ref() {
+      __sync_fetch_and_xor(&reference_count, MAX_REF);
+    }
+    
+    inline size_t inc_idx() {
+      return idx.inc_ret_last();
+    }
+
+    inline size_t inc_idx(size_t n) {
+      return idx.inc_ret_last(n);
+    }
+  };
+} // lockfree_push_back_impl
   
-  /**
-   * Provides a lock free way to insert elements to the end
-   * of a container. Container must provide 3 functions.
-   *  - T& operator[](size_t idx)
-   *  - void resize(size_t len)
-   *  - size_t size()
-   *
-   * resize(n) must guarantee that size() >= n.
-   * T& operator[](size_t idx) must succeed for idx < size() and must be 
-   * safely executeable in parallel.
-   * size() must be safely executeable in parallel with resize().
-   */
-  template <typename Container, typename T = typename Container::value_type>
-  class lockfree_push_back {
+/**
+ * Provides a lock free way to insert elements to the end
+ * of a container. Container must provide 3 functions.
+ *  - T& operator[](size_t idx)
+ *  - void resize(size_t len)
+ *  - size_t size()
+ *
+ * resize(n) must guarantee that size() >= n.
+ * T& operator[](size_t idx) must succeed for idx < size() and must be 
+ * safely executeable in parallel.
+ * size() must be safely executeable in parallel with resize().
+ */
+template <typename Container, typename T = typename Container::value_type>
+class lockfree_push_back {
   private:
     Container& container;
     lockfree_push_back_impl::idx_ref cur;
@@ -91,7 +68,7 @@ namespace graphlab {
     float scalefactor;
   public:
     lockfree_push_back(Container& container, size_t startidx, float scalefactor = 2):
-      container(container),cur(startidx), scalefactor(scalefactor) { }
+                            container(container),cur(startidx), scalefactor(scalefactor) { }
 
     size_t size() const {
       return cur.idx.value;
@@ -167,7 +144,7 @@ namespace graphlab {
       }
       return putpos;
     }
-  };
+};
 
 } // namespace graphlab
 #endif

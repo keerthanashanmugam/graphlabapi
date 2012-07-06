@@ -130,6 +130,8 @@ namespace graphlab {
     } // end of list_files
 
     inline static bool has_hadoop() { return true; }
+    
+    static hdfs& get_hdfs();
   }; // end of class hdfs
 #else
 
@@ -145,17 +147,17 @@ namespace graphlab {
     public:
       hdfs_device(const hdfs& hdfs_fs, const std::string& filename,
                   const bool write = false) { 
-        logstream(LOG_FATAL) << "Hadoop is not installed on this system." 
+        logstream(LOG_FATAL) << "Libhdfs is not installed on this system." 
                              << std::endl;
       }
       void close() { }
       std::streamsize read(char* strm_ptr, std::streamsize n) {
-        logstream(LOG_FATAL) << "Hadoop is not installed on this system." 
+        logstream(LOG_FATAL) << "Libhdfs is not installed on this system." 
                              << std::endl;
         return 0;
       } // end of read
       std::streamsize write(const char* strm_ptr, std::streamsize n) {
-        logstream(LOG_FATAL) << "Hadoop is not installed on this system." 
+        logstream(LOG_FATAL) << "Libhdfs is not installed on this system." 
                              << std::endl;
         return 0;
       }
@@ -172,25 +174,26 @@ namespace graphlab {
      * should be sufficient for most uses 
      */
     hdfs(const std::string& host = "default", int port = 0) {
-      logstream(LOG_FATAL) << "Hadoop is not installed on this system." 
+      logstream(LOG_FATAL) << "Libhdfs is not installed on this system." 
                            << std::endl;
     } // end of constructor
 
 
     
     inline std::vector<std::string> list_files(const std::string& path) {
-      logstream(LOG_FATAL) << "Hadoop is not installed on this system." 
+      logstream(LOG_FATAL) << "Libhdfs is not installed on this system." 
                            << std::endl;
       return std::vector<std::string>();;
     } // end of list_files
 
     // No hadoop available
     inline static bool has_hadoop() { return false; }
+    
+    static hdfs& get_hdfs();
   }; // end of class hdfs
 
 
 #endif
-
 
 }; // end of namespace graphlab
 #endif

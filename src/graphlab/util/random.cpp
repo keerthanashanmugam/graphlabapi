@@ -48,6 +48,11 @@ namespace graphlab {
      */
     class nondet_generator {
     public:
+      static nondet_generator& global() {
+        static nondet_generator global_gen;
+        return global_gen;
+      }
+
       typedef size_t result_type;
       BOOST_STATIC_CONSTANT(result_type, min_value = 
                             boost::integer_traits<result_type>::const_min);
@@ -78,7 +83,7 @@ namespace graphlab {
       std::ifstream rnd_dev;
       mutex mut;
     };
-    nondet_generator global_nondet_rng;
+    //nondet_generator global_nondet_rng;
 
 
 
@@ -93,7 +98,11 @@ namespace graphlab {
       std::set<generator*> generators;
       generator master;
       mutex mut;
-      
+
+      static source_registry& global() {
+        static source_registry registry;
+        return registry;
+      }
       /**
        * Seed all threads using the default seed
        */
@@ -171,7 +180,7 @@ namespace graphlab {
         mut.unlock();
       }
     };
-    source_registry registry;
+    // source_registry registry;
 
 
 
@@ -191,7 +200,7 @@ namespace graphlab {
       generator* tls_rnd_ptr = 
         reinterpret_cast<generator*>(ptr);
       if(tls_rnd_ptr != NULL) { 
-        registry.unregister_source(tls_rnd_ptr);
+        source_registry::global().unregister_source(tls_rnd_ptr);
         delete tls_rnd_ptr; 
       }
     }
@@ -207,13 +216,24 @@ namespace graphlab {
         pthread_key_create(&TLS_RANDOM_SOURCE_KEY,
                            destroy_tls_data);
       }
-    }; 
-    /**
-     * This static constant instantiates forces the pthread key
-     * allocation.
-     */
-    const tls_key_creator key;     
+    };
+    // This function is to be called prior to any access to the random
+    // source
+    static pthread_key_t get_random_source_key() {
+      static const tls_key_creator key;
+      return key.TLS_RANDOM_SOURCE_KEY;
+    }
+    // This forces __init_keys__ to be called prior to main.
+    static pthread_key_t __unused_init_keys__(get_random_source_key());
 
+  // the combination of the two mechanisms above will force the
+  // thread local store to be initialized
+  // 1: before main
+  // 2: before any use of random by global variables.
+  // KNOWN_ISSUE: if a global variable (initialized before main)
+  //               spawns threads which then call random. Things explode.
+  
+    
     /////////////////////////////////////////////////////////////
     //// Implementation of header functions
     
@@ -223,14 +243,14 @@ namespace graphlab {
       // get the thread local storage
       generator* tls_rnd_ptr = 
         reinterpret_cast<generator*>
-        (pthread_getspecific(key.TLS_RANDOM_SOURCE_KEY));
+        (pthread_getspecific(get_random_source_key()));
       // Create a tls_random_source if none was provided
       if(tls_rnd_ptr == NULL) {
         tls_rnd_ptr = new generator();      
         assert(tls_rnd_ptr != NULL);
         // This will seed it with the master rng
-        registry.register_generator(tls_rnd_ptr);
-        pthread_setspecific(key.TLS_RANDOM_SOURCE_KEY, 
+        source_registry::global().register_generator(tls_rnd_ptr);
+        pthread_setspecific(get_random_source_key(), 
                             tls_rnd_ptr);      
       }
       // assert(tls_rnd_ptr != NULL);
@@ -239,25 +259,37 @@ namespace graphlab {
 
 
 
-    void seed() { registry.seed();  } 
+    void seed() { source_registry::global().seed();  } 
 
-    void nondet_seed() { registry.nondet_seed(); } 
+    void nondet_seed() { source_registry::global().nondet_seed(); } 
 
-    void time_seed() { registry.time_seed(); } 
+    void time_seed() { source_registry::global().time_seed(); } 
 
-    void seed(const size_t seed_value) { registry.seed(seed_value);  } 
+    void seed(const size_t seed_value) { 
+      source_registry::global().seed(seed_value);  
+    } 
 
 
     void generator::nondet_seed() {
+      // Get the global nondeterministic random number generator.
+      nondet_generator& nondet_rnd(nondet_generator::global());
       mut.lock();
       // std::cout << "initializing real rng" << std::endl;
-      real_rng.seed(global_nondet_rng());
+      real_rng.seed(nondet_rnd());
       // std::cout << "initializing discrete rng" << std::endl;
-      discrete_rng.seed(global_nondet_rng());
+      discrete_rng.seed(nondet_rnd());
       // std::cout << "initializing fast discrete rng" << std::endl;
-      fast_discrete_rng.seed(global_nondet_rng());
+      fast_discrete_rng.seed(nondet_rnd());
       mut.unlock();
     }
+
+
+    void pdf2cdf(std::vector<double>& pdf) {
+      double Z = 0;
+      for(size_t i = 0; i < pdf.size(); ++i) Z += pdf[i];
+      for(size_t i = 0; i < pdf.size(); ++i)
+        pdf[i] = pdf[i]/Z + ((i>0)? pdf[i-1] : 0);
+    } // end of pdf2cdf
 
 
 

@@ -20,12 +20,13 @@
  *
  */
 
+#ifndef GRAPHLAB_GRAPH_INCLUDES
+#define GRAPHLAB_GRAPH_INCLUDES
 
+#include <graphlab/graph/distributed_graph.hpp>
 
+#endif
 
-#include <graphlab/graph/graph.hpp>
-#include <graphlab/graph/graph_partitioner.hpp>
-#include <graphlab/graph/disk_graph.hpp>
 
 
 

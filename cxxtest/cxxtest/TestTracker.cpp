@@ -1,3 +1,14 @@
+/*
+-------------------------------------------------------------------------
+ CxxTest: A lightweight C++ unit testing library.
+ Copyright (c) 2008 Sandia Corporation.
+ This software is distributed under the LGPL License v2.1
+ For more information, see the COPYING file in the top CxxTest directory.
+ Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+ the U.S. Government retains certain rights in this software.
+-------------------------------------------------------------------------
+*/
+
 #ifndef __cxxtest__TestTracker_cpp__
 #define __cxxtest__TestTracker_cpp__
 
@@ -6,11 +17,13 @@
 namespace CxxTest
 {
     bool TestTracker::_created = false;
+    bool TestTracker::print_tracing = false;
 
     TestTracker::TestTracker()
     {
         if ( !_created ) {
             initialize();
+            setListener( 0 );
             _created = true;
         }
     }
@@ -32,7 +45,6 @@ namespace CxxTest
         _testFailedAsserts = 0;
         _suiteFailedTests = 0;
         _failedSuites = 0;
-        setListener( 0 );
         _world = 0;
         _suite = 0;
         _test = 0;
@@ -112,30 +124,30 @@ namespace CxxTest
         setWorld( 0 );
     }
 
-    void TestTracker::trace( const char *file, unsigned line, const char *expression )
+    void TestTracker::trace( const char *file, int line, const char *expression )
     {
         _l->trace( file, line, expression );
     }
 
-    void TestTracker::warning( const char *file, unsigned line, const char *expression )
+    void TestTracker::warning( const char *file, int line, const char *expression )
     {
         countWarning();
         _l->warning( file, line, expression );
     }
 
-    void TestTracker::failedTest( const char *file, unsigned line, const char *expression )
+    void TestTracker::failedTest( const char *file, int line, const char *expression )
     {
         countFailure();
         _l->failedTest( file, line, expression );
     }
         
-    void TestTracker::failedAssert( const char *file, unsigned line, const char *expression )
+    void TestTracker::failedAssert( const char *file, int line, const char *expression )
     {
         countFailure();
         _l->failedAssert( file, line, expression );
     }
 
-    void TestTracker::failedAssertEquals( const char *file, unsigned line,
+    void TestTracker::failedAssertEquals( const char *file, int line,
                                           const char *xStr, const char *yStr,
                                           const char *x, const char *y )
     {
@@ -143,7 +155,7 @@ namespace CxxTest
         _l->failedAssertEquals( file, line, xStr, yStr, x, y );
     }
 
-    void TestTracker::failedAssertSameData( const char *file, unsigned line,
+    void TestTracker::failedAssertSameData( const char *file, int line,
                                             const char *xStr, const char *yStr,
                                             const char *sizeStr, const void *x,
                                             const void *y, unsigned size )
@@ -152,7 +164,7 @@ namespace CxxTest
         _l->failedAssertSameData( file, line, xStr, yStr, sizeStr, x, y, size );
     }
 
-    void TestTracker::failedAssertDelta( const char *file, unsigned line,
+    void TestTracker::failedAssertDelta( const char *file, int line,
                                          const char *xStr, const char *yStr, const char *dStr,
                                          const char *x, const char *y, const char *d )
     {
@@ -160,7 +172,7 @@ namespace CxxTest
         _l->failedAssertDelta( file, line, xStr, yStr, dStr, x, y, d );
     }
     
-    void TestTracker::failedAssertDiffers( const char *file, unsigned line,
+    void TestTracker::failedAssertDiffers( const char *file, int line,
                                            const char *xStr, const char *yStr,
                                            const char *value )
     {
@@ -168,7 +180,7 @@ namespace CxxTest
         _l->failedAssertDiffers( file, line, xStr, yStr, value );
     }
         
-    void TestTracker::failedAssertLessThan( const char *file, unsigned line,
+    void TestTracker::failedAssertLessThan( const char *file, int line,
                                             const char *xStr, const char *yStr,
                                             const char *x, const char *y )
     {
@@ -176,7 +188,7 @@ namespace CxxTest
         _l->failedAssertLessThan( file, line, xStr, yStr, x, y );
     }
 
-    void TestTracker::failedAssertLessThanEquals( const char *file, unsigned line,
+    void TestTracker::failedAssertLessThanEquals( const char *file, int line,
                                                   const char *xStr, const char *yStr,
                                                   const char *x, const char *y )
     {
@@ -184,14 +196,14 @@ namespace CxxTest
         _l->failedAssertLessThanEquals( file, line, xStr, yStr, x, y );
     }
 
-    void TestTracker::failedAssertPredicate( const char *file, unsigned line,
+    void TestTracker::failedAssertPredicate( const char *file, int line,
                                              const char *predicate, const char *xStr, const char *x )
     {
         countFailure();
         _l->failedAssertPredicate( file, line, predicate, xStr, x );
     }
         
-    void TestTracker::failedAssertRelation( const char *file, unsigned line,
+    void TestTracker::failedAssertRelation( const char *file, int line,
                                             const char *relation, const char *xStr, const char *yStr,
                                             const char *x, const char *y )
     {
@@ -199,7 +211,7 @@ namespace CxxTest
         _l->failedAssertRelation( file, line, relation, xStr, yStr, x, y );
     }
         
-    void TestTracker::failedAssertThrows( const char *file, unsigned line,
+    void TestTracker::failedAssertThrows( const char *file, int line,
                                           const char *expression, const char *type,
                                           bool otherThrown )
     {
@@ -207,10 +219,16 @@ namespace CxxTest
         _l->failedAssertThrows( file, line, expression, type, otherThrown );
     }
         
-    void TestTracker::failedAssertThrowsNot( const char *file, unsigned line, const char *expression )
+    void TestTracker::failedAssertThrowsNot( const char *file, int line, const char *expression )
     {
         countFailure();
         _l->failedAssertThrowsNot( file, line, expression );
+    }
+
+    void TestTracker::failedAssertSameFiles( const char *file, int line, const char *file1, const char* file2, const char* explanation )
+    {
+        countFailure();
+        _l->failedAssertSameFiles( file, line, file1, file2, explanation );
     }
 
     void TestTracker::setWorld( const WorldDescription *w )
@@ -243,6 +261,7 @@ namespace CxxTest
                 ++ _failedSuites;
         }
     }
-};
+}
 
 #endif // __cxxtest__TestTracker_cpp__
+

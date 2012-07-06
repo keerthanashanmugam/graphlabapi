@@ -1,3 +1,14 @@
+/*
+-------------------------------------------------------------------------
+ CxxTest: A lightweight C++ unit testing library.
+ Copyright (c) 2008 Sandia Corporation.
+ This software is distributed under the LGPL License v2.1
+ For more information, see the COPYING file in the top CxxTest directory.
+ Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+ the U.S. Government retains certain rights in this software.
+-------------------------------------------------------------------------
+*/
+
 #include <cxxtest/DummyDescriptions.h>
 
 namespace CxxTest 
@@ -5,7 +16,7 @@ namespace CxxTest
     DummyTestDescription::DummyTestDescription() {}
         
     const char *DummyTestDescription::file() const { return "<no file>"; }
-    unsigned DummyTestDescription::line() const { return 0; }
+    int DummyTestDescription::line() const { return 0; }
     const char *DummyTestDescription::testName() const { return "<no test>"; }
     const char *DummyTestDescription::suiteName() const { return "<no suite>"; }
     bool DummyTestDescription::setUp() { return true;}
@@ -18,7 +29,7 @@ namespace CxxTest
     DummySuiteDescription::DummySuiteDescription() : _test() {}
         
     const char *DummySuiteDescription::file() const { return "<no file>"; }
-    unsigned DummySuiteDescription::line() const { return 0; }
+    int DummySuiteDescription::line() const { return 0; }
     const char *DummySuiteDescription::suiteName() const { return "<no suite>"; }
     TestSuite *DummySuiteDescription::suite() const { return 0; }
     unsigned DummySuiteDescription::numTests() const { return 0; }

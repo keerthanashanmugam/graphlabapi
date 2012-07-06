@@ -117,7 +117,33 @@ private:
   }
 
 public:
+  struct insert_iterator{
+    cuckoo_map* cmap;
+    typedef std::forward_iterator_tag iterator_category;
+    typedef typename cuckoo_map::value_type value_type;
 
+    insert_iterator(cuckoo_map* c):cmap(c) {}
+
+    insert_iterator operator++() {
+      return (*this);
+    }
+    insert_iterator operator++(int) {
+      return (*this);
+    }
+
+    insert_iterator& operator*() {
+      return *this;
+    }
+    insert_iterator& operator=(const insert_iterator& i) {
+      cmap = i.cmap;
+      return *this;
+    }
+
+    insert_iterator& operator=(const value_type& v) {
+      cmap->insert(v);
+      return *this;
+    }
+  };
 
   struct const_iterator {
     const cuckoo_map* cmap;
@@ -390,6 +416,13 @@ public:
 
     while(iter.vec_iter != data_end() &&
           keyeq(iter.vec_iter->first, illegalkey)) ++iter.vec_iter;
+
+
+    if (iter.vec_iter == data_end()) {
+      iter.in_stash = true;
+      iter.stash_iter = stash.begin();
+    }
+      
     return iter;
   }
 
@@ -406,6 +439,12 @@ public:
 
     while(iter.vec_iter != data_end() &&
           keyeq(iter.vec_iter->first, illegalkey)) ++iter.vec_iter;
+
+    if (iter.vec_iter == data_end()) {
+      iter.in_stash = true;
+      iter.stash_iter = stash.begin();
+    }
+
     return iter;
   }
 
@@ -432,14 +471,25 @@ public:
 
   index_type compute_hash(size_t k , const uint32_t seed) const {
     // a bunch of random numbers
-    static const size_t a[8] = {0x6306AA9DFC13C8E7,
-                                0xA8CD7FBCA2A9FFD4,
-                                0x40D341EB597ECDDC,
-                                0x99CFA1168AF8DA7E,
-                                0x7C55BCC3AF531D42,
-                                0x1BC49DB0842A21DD,
-                                0x2181F03B1DEE299F,
-                                0xD524D92CBFEC63E9};
+#if (__SIZEOF_PTRDIFF_T__ == 8)
+      static const size_t a[8] = {0x6306AA9DFC13C8E7,
+                                  0xA8CD7FBCA2A9FFD4,
+                                  0x40D341EB597ECDDC,
+                                  0x99CFA1168AF8DA7E,
+                                  0x7C55BCC3AF531D42,
+                                  0x1BC49DB0842A21DD,
+                                  0x2181F03B1DEE299F,
+                                  0xD524D92CBFEC63E9};
+#else
+      static const size_t a[8] = {0xFC13C8E7,
+                                  0xA2A9FFD4,
+                                  0x597ECDDC,
+                                  0x8AF8DA7E,
+                                  0xAF531D42,
+                                  0x842A21DD,
+                                  0x1DEE299F,
+                                  0xBFEC63E9};
+#endif
 
     index_type s = mix(a[seed] ^ k);
     return s % datalen;
@@ -584,7 +634,8 @@ public:
     size_t tmpnumel = 0;
     iarc >> tmpnumel >> illegalkey;
     reserve(tmpnumel * 1.5);
-    deserialize_iterator<iarchive, non_const_value_type>(iarc, std::inserter(*this, begin()));
+    deserialize_iterator<iarchive, non_const_value_type>
+      (iarc, insert_iterator(this));
   }
   
 };

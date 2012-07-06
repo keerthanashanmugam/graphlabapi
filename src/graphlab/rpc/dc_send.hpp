@@ -34,7 +34,8 @@ namespace graphlab {
 namespace dc_impl {
 
 /**
-\ingroup rpc_internal
+\ingroup rpc
+\internal
 Base class of the data sending class.
 This class forms the sending side of a "multiplexer"
 send_data() will be called with a packet mask as well as a
@@ -70,17 +71,19 @@ class dc_send{
   virtual size_t bytes_sent() = 0;
   
   virtual void flush() = 0;
+
+  virtual size_t send_queue_length() const = 0;
   
   virtual size_t set_option(std::string opt, size_t val) {
     return 0;
   }
 
   /**
-   * Returns true if there is data, false otherwise. This function
+   * Returns length if there is data, 0 otherwise. This function
    * must be reentrant, but it is guaranteed that only one thread will
    * call this function at anytime.
    */
-  virtual bool get_outgoing_data(circular_iovec_buffer& outdata) = 0;
+  virtual size_t get_outgoing_data(circular_iovec_buffer& outdata) = 0;
 
 };
   

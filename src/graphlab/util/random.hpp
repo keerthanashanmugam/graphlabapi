@@ -183,18 +183,29 @@ namespace graphlab {
         return result;
       } // end of gamma
 
+
       /**
        * Generate a gaussian random variable with zero mean and unit
        * variance.
        */
       inline double gaussian(const double mean = double(0), 
-                             const double var = double(1)) {
-        boost::normal_distribution<double> normal_dist(mean,var);
+                             const double stdev = double(1)) {
+        boost::normal_distribution<double> normal_dist(mean,stdev);
         mut.lock();
         const double result = normal_dist(real_rng);
         mut.unlock();
         return result;
       } // end of gaussian
+
+      /**
+       * Generate a gaussian random variable with zero mean and unit
+       * variance.
+       */
+      inline double normal(const double mean = double(0), 
+                           const double stdev = double(1)) {
+        return gaussian(mean, stdev);
+      } // end of normal
+
 
       inline bool bernoulli(const double p = double(0.5)) {
         boost::bernoulli_distribution<double> dist(p);
@@ -216,23 +227,38 @@ namespace graphlab {
       /**
        * Draw a random number from a multinomial
        */
-      size_t multinomial(const std::vector<double>& prb) {
+      template<typename Double>
+      size_t multinomial(const std::vector<Double>& prb) {
         ASSERT_GT(prb.size(),0);
         if (prb.size() == 1) { return 0; }
-        double sum(0);
+        Double sum(0);
         for(size_t i = 0; i < prb.size(); ++i) {
           ASSERT_GE(prb[i], 0); // Each entry must be P[i] >= 0
           sum += prb[i];
         }
         ASSERT_GT(sum, 0); // Normalizer must be positive
         // actually draw the random number
-        const double rnd(uniform<double>(0,1));
+        const Double rnd(uniform<Double>(0,1));
         size_t ind = 0;
-        for(double cumsum(prb[ind]/sum); 
+        for(Double cumsum(prb[ind]/sum); 
             rnd > cumsum && (ind+1) < prb.size(); 
             cumsum += (prb[++ind]/sum));
         return ind;
       } // end of multinomial
+
+
+      /**
+       * Generate a draw from a multinomial using a CDF.  This is
+       * slightly more efficient since normalization is not required
+       * and a binary search can be used.
+       */
+      template<typename Double>
+      inline size_t multinomial_cdf(const std::vector<Double>& cdf) {
+        return std::upper_bound(cdf.begin(), cdf.end(),
+                                uniform<Double>(0,1)) - cdf.begin();
+        
+      } // end of multinomial_cdf
+
 
       /** 
        * Construct a random permutation
@@ -376,11 +402,21 @@ namespace graphlab {
     /**
      * \ingroup random
      * Generate a gaussian random variable with zero mean and unit
-     * variance.
+     * standard deviation.
      */
     inline double gaussian(const double mean = double(0), 
-                    const double var = double(1)) {
-      return get_source().gaussian(mean, var);
+                           const double stdev = double(1)) {
+      return get_source().gaussian(mean, stdev);
+    }
+
+    /**
+     * \ingroup random
+     * Generate a gaussian random variable with zero mean and unit
+     * standard deviation.
+     */
+    inline double normal(const double mean = double(0), 
+                         const double stdev = double(1)) {
+      return get_source().normal(mean, stdev);
     }
 
     /**
@@ -404,8 +440,19 @@ namespace graphlab {
      * Generate a draw from a multinomial.  This function
      * automatically normalizes as well.
      */
-    inline size_t multinomial(const std::vector<double>& prb) {
+    template<typename Double>
+    inline size_t multinomial(const std::vector<Double>& prb) {
       return get_source().multinomial(prb);
+    }
+
+
+    /**
+     * \ingroup random
+     * Generate a draw from a cdf;
+     */
+    template<typename Double>
+    inline size_t multinomial_cdf(const std::vector<Double>& cdf) {
+      return get_source().multinomial_cdf(cdf);
     }
 
 
@@ -438,6 +485,13 @@ namespace graphlab {
       get_source().shuffle(begin, end);
     }
 
+    /**
+     * Converts a discrete PDF into a CDF
+     */
+    void pdf2cdf(std::vector<double>& pdf);
+
+
+    
   }; // end of random 
 }; // end of graphlab
 

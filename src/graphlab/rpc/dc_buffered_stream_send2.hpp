@@ -1,4 +1,4 @@
-/**  
+/*  
  * Copyright (c) 2009 Carnegie Mellon University. 
  *     All rights reserved.
  *
@@ -41,6 +41,7 @@ namespace dc_impl {
 
 
 /**
+ * \internal
    \ingroup rpc
 Sender for the dc class.
   The job of the sender is to take as input data blocks of
@@ -100,13 +101,17 @@ class dc_buffered_stream_send2: public dc_send{
                       unsigned char packet_type_mask,
                       char* data, size_t len);
 
-  bool get_outgoing_data(circular_iovec_buffer& outdata);
+  size_t get_outgoing_data(circular_iovec_buffer& outdata);
   
   
   inline size_t bytes_sent() {
     return bytessent.value;
   }
 
+  size_t send_queue_length() const {
+    return writebuffer_totallen.value;
+  }
+  
   void flush();
 
  private:

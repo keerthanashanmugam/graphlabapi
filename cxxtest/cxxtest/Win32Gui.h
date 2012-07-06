@@ -1,3 +1,14 @@
+/*
+-------------------------------------------------------------------------
+ CxxTest: A lightweight C++ unit testing library.
+ Copyright (c) 2008 Sandia Corporation.
+ This software is distributed under the LGPL License v2.1
+ For more information, see the COPYING file in the top CxxTest directory.
+ Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+ the U.S. Government retains certain rights in this software.
+-------------------------------------------------------------------------
+*/
+
 #ifndef __cxxtest__Win32Gui_h__
 #define __cxxtest__Win32Gui_h__
 
@@ -345,7 +356,7 @@ namespace CxxTest
             case WM_CLOSE:
             case WM_DESTROY:
             case WM_QUIT:
-                ExitProcess( 0 );
+                ExitProcess( tracker().failedTests() );
 
             default: return DefWindowProc( window, message, wParam, lParam );
             }
@@ -526,6 +537,6 @@ namespace CxxTest
             HeapFree( GetProcessHeap(), 0, data );
         }
     };
-};
+}
 
 #endif // __cxxtest__Win32Gui_h__

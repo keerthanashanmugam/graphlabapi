@@ -1,8 +1,19 @@
 project(GraphLab)
 
+#add_distributed_graphlab_executable(dist_pagerank dist_pagerank.cpp)
+#add_distributed_graphlab_executable(dist_sync_pagerank dist_pagerank.cpp)
+#add_distributed_graphlab_executable(dist_fscope_pagerank dist_pagerank.cpp)
+#set_target_properties(dist_fscope_pagerank PROPERTIES COMPILE_FLAGS -DFSCOPE)
+#set_target_properties(dist_sync_pagerank PROPERTIES COMPILE_FLAGS -DSYNCHRONOUS_ENGINE)
 
-add_dist2_executable(make_pagerank_atoms make_pagerank_atoms.cpp)
-add_dist2_executable(dist_pagerank dist_pagerank.cpp)
+#add_distributed_graphlab_executable(dist_sync_pagerank dist_sync_pagerank.cpp)
 
 
 
+#add_distributed_graphlab_executable(dist_delta_pagerank dist_delta_pagerank.cpp)
+
+#add_graphlab_executable(dist_sync_pagerank_minimal dist_sync_pagerank_minimal.cpp)
+
+
+
+#copy_files(*.job)

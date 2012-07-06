@@ -1,3 +1,14 @@
+/*
+-------------------------------------------------------------------------
+ CxxTest: A lightweight C++ unit testing library.
+ Copyright (c) 2008 Sandia Corporation.
+ This software is distributed under the LGPL License v2.1
+ For more information, see the COPYING file in the top CxxTest directory.
+ Under the terms of Contract DE-AC04-94AL85000 with Sandia Corporation,
+ the U.S. Government retains certain rights in this software.
+-------------------------------------------------------------------------
+*/
+
 #ifndef __cxxtest__TestSuite_h__
 #define __cxxtest__TestSuite_h__
 
@@ -11,8 +22,9 @@
 #include <cxxtest/TestTracker.h>
 #include <cxxtest/Descriptions.h>
 #include <cxxtest/ValueTraits.h>
+#include <sstream>
 
-#ifdef _CXXTEST_HAVE_STD
+#if defined(_CXXTEST_HAVE_STD)
 #   include <stdexcept>
 #endif // _CXXTEST_HAVE_STD
 
@@ -36,24 +48,26 @@ namespace CxxTest
     unsigned maxDumpSize();
     void setMaxDumpSize( unsigned value = CXXTEST_MAX_DUMP_SIZE );
 
-    void doTrace( const char *file, unsigned line, const char *message );
-    void doWarn( const char *file, unsigned line, const char *message );
-    void doFailTest( const char *file, unsigned line, const char *message );
-    void doFailAssert( const char *file, unsigned line, const char *expression, const char *message );
+    void doTrace( const char *file, int line, const char *message );
+    void doWarn( const char *file, int line, const char *message );
+    void doFailTest( const char *file, int line, const char *message );
+    void doFailAssert( const char *file, int line, const char *expression, const char *message );
 
     template<class X, class Y>
-    bool equals( X x, Y y )
-    {
-        return (x == y);
-    }
+    struct equals {
+        static bool test( X x, Y y )
+        {
+            return (x == y);
+        }
+    };
 
     template<class X, class Y>
-    void doAssertEquals( const char *file, unsigned line,
+    void doAssertEquals( const char *file, int line,
                          const char *xExpr, X x,
                          const char *yExpr, Y y,
                          const char *message )
     {
-        if ( !equals( x, y ) ) {
+        if ( !equals<X,Y>::test( x, y ) ) {
             if ( message )
                 tracker().failedTest( file, line, message );
             tracker().failedAssertEquals( file, line, xExpr, yExpr, TS_AS_STRING(x), TS_AS_STRING(y) );
@@ -61,25 +75,33 @@ namespace CxxTest
         }
     }
 
-    void doAssertSameData( const char *file, unsigned line,
+    bool sameData( const void *x, const void *y, unsigned size );
+
+    void doAssertSameData( const char *file, int line,
                            const char *xExpr, const void *x,
                            const char *yExpr, const void *y,
                            const char *sizeExpr, unsigned size,
                            const char *message );
 
-    template<class X, class Y>
-    bool differs( X x, Y y )
-    {
-        return !(x == y);
-    }
+//#if defined(_CXXTEST_HAVE_STD)
+    bool sameFiles( const char* file1, const char* file2, std::ostringstream& explanation);
+//#endif
 
     template<class X, class Y>
-    void doAssertDiffers( const char *file, unsigned line,
+    struct differs {
+        static bool test( X x, Y y )
+        {
+            return !(x == y);
+        }
+    };
+
+    template<class X, class Y>
+    void doAssertDiffers( const char *file, int line,
                           const char *xExpr, X x,
                           const char *yExpr, Y y,
                           const char *message )
     {
-        if ( !differs( x, y ) ) {
+        if ( !differs<X,Y>::test( x, y ) ) {
             if ( message )
                 tracker().failedTest( file, line, message );
             tracker().failedAssertDiffers( file, line, xExpr, yExpr, TS_AS_STRING(x) );
@@ -88,18 +110,20 @@ namespace CxxTest
     }
 
     template<class X, class Y>
-    bool lessThan( X x, Y y )
-    {
-        return (x < y);
-    }
+    struct lessThan {
+        static bool test( X x, Y y )
+        {
+            return (x < y);
+        }
+    };
 
     template<class X, class Y>
-    void doAssertLessThan( const char *file, unsigned line,
+    void doAssertLessThan( const char *file, int line,
                            const char *xExpr, X x,
                            const char *yExpr, Y y,
                            const char *message )
     {
-        if ( !lessThan(x, y) ) {
+        if ( !lessThan<X,Y>::test(x, y) ) {
             if ( message )
                 tracker().failedTest( file, line, message );
             tracker().failedAssertLessThan( file, line, xExpr, yExpr, TS_AS_STRING(x), TS_AS_STRING(y) );
@@ -108,18 +132,20 @@ namespace CxxTest
     }
 
     template<class X, class Y>
-    bool lessThanEquals( X x, Y y )
-    {
-        return (x <= y);
-    }
+    struct lessThanEquals {
+        static bool test( X x, Y y )
+        {
+            return (x <= y);
+        }
+    };
 
     template<class X, class Y>
-    void doAssertLessThanEquals( const char *file, unsigned line,
+    void doAssertLessThanEquals( const char *file, int line,
                                  const char *xExpr, X x,
                                  const char *yExpr, Y y,
                                  const char *message )
     {
-        if ( !lessThanEquals( x, y ) ) {
+        if ( !lessThanEquals<X,Y>::test( x, y ) ) {
             if ( message )
                 tracker().failedTest( file, line, message );
             tracker().failedAssertLessThanEquals( file, line, xExpr, yExpr, TS_AS_STRING(x), TS_AS_STRING(y) );
@@ -128,7 +154,7 @@ namespace CxxTest
     }
 
     template<class X, class P>
-    void doAssertPredicate( const char *file, unsigned line,
+    void doAssertPredicate( const char *file, int line,
                             const char *pExpr, const P &p,
                             const char *xExpr, X x,
                             const char *message )
@@ -142,7 +168,7 @@ namespace CxxTest
     }
 
     template<class X, class Y, class R>
-    void doAssertRelation( const char *file, unsigned line,
+    void doAssertRelation( const char *file, int line,
                            const char *rExpr, const R &r, 
                            const char *xExpr, X x,
                            const char *yExpr, Y y,
@@ -156,20 +182,31 @@ namespace CxxTest
         }
     }
 
-    template<class X, class Y, class D>
-    bool delta( X x, Y y, D d )
-    {
-        return ((y >= x - d) && (y <= x + d));
+    // An indirection template so the compiler can determine what type 
+    // "X +/- D" should be
+    template<class X, class Y>
+    bool delta_le_helper( X x, Y y )
+    { 
+        return lessThanEquals<X,Y>::test(x,y); 
     }
 
     template<class X, class Y, class D>
-    void doAssertDelta( const char *file, unsigned line,
+    struct delta {
+        static bool test( X x, Y y, D d )
+        {
+            return delta_le_helper(x-d, y) && delta_le_helper(y, x+d);
+            //(y >= x - d) && (y <= x + d));
+        }
+    };
+
+    template<class X, class Y, class D>
+    void doAssertDelta( const char *file, int line,
                         const char *xExpr, X x,
                         const char *yExpr, Y y,
                         const char *dExpr, D d,
                         const char *message )
     {
-        if ( !delta( x, y, d ) ) {
+        if ( !delta<X,Y,D>::test( x, y, d ) ) {
             if ( message )
                 tracker().failedTest( file, line, message );
             
@@ -179,27 +216,34 @@ namespace CxxTest
         }
     }
 
-    void doFailAssertThrows( const char *file, unsigned line,
+    void doFailAssertThrows( const char *file, int line,
                              const char *expr, const char *type,
                              bool otherThrown,
-                             const char *message );
+                             const char *message,
+                             const char *exception = 0 );
     
-    void doFailAssertThrowsNot( const char *file, unsigned line,
-                                const char *expression, const char *message );
+    void doFailAssertThrowsNot( const char *file, int line,
+                                const char *expression, const char *message,
+                                const char *exception = 0 );
+
+    void doAssertSameFiles( const char* file, int line,
+                            const char* file1, const char* file2,
+                            const char* message);
 
 #   ifdef _CXXTEST_HAVE_EH
 #       define _TS_TRY try
 #       define _TS_CATCH_TYPE(t, b) catch t b
 #       define _TS_CATCH_ABORT(b) _TS_CATCH_TYPE( (const CxxTest::AbortTest &), b )
 #       define _TS_LAST_CATCH(b) _TS_CATCH_TYPE( (...), b )
-#       define _TSM_LAST_CATCH(f,l,m) _TS_LAST_CATCH( { (CxxTest::tracker()).failedTest(f,l,m); } )
+#       define _TSM_LAST_CATCH(f,l,m) _TS_LAST_CATCH( { (CxxTest::tracker()).failedTest(f,l,m); TS_ABORT(); } )
 #       ifdef _CXXTEST_HAVE_STD
-#           define ___TSM_CATCH(f,l,m) \
-                    catch(const std::exception &e) { (CxxTest::tracker()).failedTest(f,l,e.what()); } \
-                    _TSM_LAST_CATCH(f,l,m)
+#           define _TS_CATCH_STD(e,b) _TS_CATCH_TYPE( (const std::exception& e), b )
 #       else // !_CXXTEST_HAVE_STD
-#           define ___TSM_CATCH(f,l,m) _TSM_LAST_CATCH(f,l,m)
+#           define _TS_CATCH_STD(e,b)
 #       endif // _CXXTEST_HAVE_STD
+#       define ___TSM_CATCH(f,l,m) \
+            _TS_CATCH_STD(e, { (CxxTest::tracker()).failedTest(f,l,e.what()); TS_ABORT(); }) \
+            _TSM_LAST_CATCH(f,l,m)
 #       define __TSM_CATCH(f,l,m) \
                 _TS_CATCH_ABORT( { throw; } ) \
                 ___TSM_CATCH(f,l,m)
@@ -213,6 +257,7 @@ namespace CxxTest
 #       define _TS_CATCH
 #       define _TS_CATCH_TYPE(t, b)
 #       define _TS_LAST_CATCH(b)
+#       define _TS_CATCH_STD(e,b)
 #       define _TS_CATCH_ABORT(b)
 #   endif // _CXXTEST_HAVE_EH
 
@@ -378,14 +423,25 @@ namespace CxxTest
 #   define ETSM_ASSERT_DELTA(m,x,y,d) _ETSM_ASSERT_DELTA(__FILE__,__LINE__,m,x,y,d)
 #   define TSM_ASSERT_DELTA(m,x,y,d) _TSM_ASSERT_DELTA(__FILE__,__LINE__,m,x,y,d)
 
+    // TS_ASSERT_SAME_FILES
+#   define ___ETS_ASSERT_SAME_FILES(f,l,x,y,m) CxxTest::doAssertSameFiles( (f), (l), (x), (y), (m) )
+#   define ___TS_ASSERT_SAME_FILES(f,l,x,y,m) { _TS_TRY { ___ETS_ASSERT_SAME_FILES(f,l,x,y,m); } __TS_CATCH(f,l) }
+    
+#   define _ETS_ASSERT_SAME_FILES(f,l,x,y) ___ETS_ASSERT_SAME_FILES(f,l,x,y,0)
+#   define _TS_ASSERT_SAME_FILES(f,l,x,y) ___TS_ASSERT_SAME_FILES(f,l,x,y,0)
+
+#   define ETS_ASSERT_SAME_FILES(x,y) _ETS_ASSERT_SAME_FILES(__FILE__,__LINE__,x,y)
+#   define TS_ASSERT_SAME_FILES(x,y) _TS_ASSERT_SAME_FILES(__FILE__,__LINE__,x,y)
+
+#   define _ETSM_ASSERT_SAME_FILES(f,l,m,x,y) ___ETS_ASSERT_SAME_FILES(f,l,x,y,TS_AS_STRING(m))
+#   define _TSM_ASSERT_SAME_FILES(f,l,m,x,y) ___TS_ASSERT_SAME_FILES(f,l,x,y,TS_AS_STRING(m))
+
+#   define ETSM_ASSERT_SAME_FILES(m,x,y) _ETSM_ASSERT_SAME_FILES(__FILE__,__LINE__,m,x,y)
+#   define TSM_ASSERT_SAME_FILES(m,x,y) _TSM_ASSERT_SAME_FILES(__FILE__,__LINE__,m,x,y)
+
+
     // TS_ASSERT_THROWS
-#   define ___TS_ASSERT_THROWS(f,l,e,t,m) { \
-            bool _ts_threw_expected = false, _ts_threw_else = false; \
-            _TS_TRY { e; } \
-            _TS_CATCH_TYPE( (t), { _ts_threw_expected = true; } ) \
-            _TS_CATCH_ABORT( { throw; } ) \
-            _TS_LAST_CATCH( { _ts_threw_else = true; } ) \
-            if ( !_ts_threw_expected ) { CxxTest::doFailAssertThrows( (f), (l), #e, #t, _ts_threw_else, (m) ); } }
+#   define ___TS_ASSERT_THROWS(f,l,e,t,m) ___TS_ASSERT_THROWS_ASSERT(f,l,e,t,(void)0,m)
 
 #   define _TS_ASSERT_THROWS(f,l,e,t) ___TS_ASSERT_THROWS(f,l,e,t,0)
 #   define TS_ASSERT_THROWS(e,t) _TS_ASSERT_THROWS(__FILE__,__LINE__,e,t)
@@ -399,8 +455,9 @@ namespace CxxTest
             _TS_TRY { e; } \
             _TS_CATCH_TYPE( (t), { a; _ts_threw_expected = true; } ) \
             _TS_CATCH_ABORT( { throw; } ) \
+            _TS_CATCH_STD( ex, { _ts_threw_expected = true; CxxTest::doFailAssertThrows((f), (l), #e, #t, true, (m), ex.what() ); } ) \
             _TS_LAST_CATCH( { _ts_threw_else = true; } ) \
-            if ( !_ts_threw_expected ) { CxxTest::doFailAssertThrows( (f), (l), #e, #t, _ts_threw_else, (m) ); } }
+            if ( !_ts_threw_expected ) { CxxTest::doFailAssertThrows( (f), (l), #e, #t, _ts_threw_else, (m), 0 ); } }
 
 #   define _TS_ASSERT_THROWS_ASSERT(f,l,e,t,a) ___TS_ASSERT_THROWS_ASSERT(f,l,e,t,a,0)
 #   define TS_ASSERT_THROWS_ASSERT(e,t,a) _TS_ASSERT_THROWS_ASSERT(__FILE__,__LINE__,e,t,a)
@@ -457,7 +514,8 @@ namespace CxxTest
 #   define ___TS_ASSERT_THROWS_NOTHING(f,l,e,m) { \
             _TS_TRY { e; } \
             _TS_CATCH_ABORT( { throw; } ) \
-            _TS_LAST_CATCH( { CxxTest::doFailAssertThrowsNot( (f), (l), #e, (m) ); } ) }
+            _TS_CATCH_STD(ex, { CxxTest::doFailAssertThrowsNot( (f), (l), #e, (m), ex.what() ); } ) \
+            _TS_LAST_CATCH( { CxxTest::doFailAssertThrowsNot( (f), (l), #e, (m), 0 ); } ) }
 
 #   define _TS_ASSERT_THROWS_NOTHING(f,l,e) ___TS_ASSERT_THROWS_NOTHING(f,l,e,0)
 #   define TS_ASSERT_THROWS_NOTHING(e) _TS_ASSERT_THROWS_NOTHING(__FILE__,__LINE__,e)
@@ -470,43 +528,74 @@ namespace CxxTest
     // This takes care of "signed <-> unsigned" warnings
     //
 #   define CXXTEST_COMPARISONS(CXXTEST_X, CXXTEST_Y, CXXTEST_T) \
-    inline bool equals( CXXTEST_X x, CXXTEST_Y y ) { return (((CXXTEST_T)x) == ((CXXTEST_T)y)); } \
-    inline bool equals( CXXTEST_Y y, CXXTEST_X x ) { return (((CXXTEST_T)y) == ((CXXTEST_T)x)); } \
-    inline bool differs( CXXTEST_X x, CXXTEST_Y y ) { return (((CXXTEST_T)x) != ((CXXTEST_T)y)); } \
-    inline bool differs( CXXTEST_Y y, CXXTEST_X x ) { return (((CXXTEST_T)y) != ((CXXTEST_T)x)); } \
-    inline bool lessThan( CXXTEST_X x, CXXTEST_Y y ) { return (((CXXTEST_T)x) < ((CXXTEST_T)y)); } \
-    inline bool lessThan( CXXTEST_Y y, CXXTEST_X x ) { return (((CXXTEST_T)y) < ((CXXTEST_T)x)); } \
-    inline bool lessThanEquals( CXXTEST_X x, CXXTEST_Y y ) { return (((CXXTEST_T)x) <= ((CXXTEST_T)y)); } \
-    inline bool lessThanEquals( CXXTEST_Y y, CXXTEST_X x ) { return (((CXXTEST_T)y) <= ((CXXTEST_T)x)); }
+    template<> struct equals<CXXTEST_X,CXXTEST_Y> {                                           \
+        static bool test(CXXTEST_X x,CXXTEST_Y y) {                                           \
+            return equals<CXXTEST_T,CXXTEST_T>::test((CXXTEST_T)x,(CXXTEST_T)y); } };         \
+    template<> struct equals<CXXTEST_Y,CXXTEST_X> {                                           \
+        static bool test(CXXTEST_Y x,CXXTEST_X y) {                                           \
+            return equals<CXXTEST_T,CXXTEST_T>::test((CXXTEST_T)x,(CXXTEST_T)y); } };         \
+    template<> struct differs<CXXTEST_X,CXXTEST_Y> {                                          \
+        static bool test(CXXTEST_X x,CXXTEST_Y y) {                                           \
+            return differs<CXXTEST_T,CXXTEST_T>::test((CXXTEST_T)x,(CXXTEST_T)y); } };        \
+    template<> struct differs<CXXTEST_Y,CXXTEST_X> {                                          \
+        static bool test(CXXTEST_Y x,CXXTEST_X y) {                                           \
+            return differs<CXXTEST_T,CXXTEST_T>::test((CXXTEST_T)x,(CXXTEST_T)y); } };        \
+    template<> struct lessThan<CXXTEST_X,CXXTEST_Y> {                                         \
+        static bool test(CXXTEST_X x,CXXTEST_Y y) {                                           \
+            return lessThan<CXXTEST_T,CXXTEST_T>::test((CXXTEST_T)x,(CXXTEST_T)y); } };       \
+    template<> struct lessThan<CXXTEST_Y,CXXTEST_X> {                                         \
+        static bool test(CXXTEST_Y x,CXXTEST_X y) {                                           \
+            return lessThan<CXXTEST_T,CXXTEST_T>::test((CXXTEST_T)x,(CXXTEST_T)y); } };       \
+    template<> struct lessThanEquals<CXXTEST_X,CXXTEST_Y> {                                   \
+        static bool test(CXXTEST_X x,CXXTEST_Y y) {                                           \
+            return lessThanEquals<CXXTEST_T,CXXTEST_T>::test((CXXTEST_T)x,(CXXTEST_T)y); } }; \
+    template<> struct lessThanEquals<CXXTEST_Y,CXXTEST_X> {                                   \
+        static bool test(CXXTEST_Y x,CXXTEST_X y) {                                           \
+            return lessThanEquals<CXXTEST_T,CXXTEST_T>::test((CXXTEST_T)x,(CXXTEST_T)y); } }
+#if 0
+    // These specializations are not needed because delta makes use of
+    // CxxTest::lessThanEquals for the actual comparison
+    template<class D> struct delta<CXXTEST_X,CXXTEST_Y, D> {              \
+        static bool test(CXXTEST_X x,CXXTEST_Y y, D d) {              \
+            return delta<CXXTEST_T,CXXTEST_T,D>::test((CXXTEST_T)x,(CXXTEST_T)y, d); } }; \
+    template<class D> struct delta<CXXTEST_Y,CXXTEST_X, D> {              \
+        static bool test(CXXTEST_Y x,CXXTEST_X y, D d) {              \
+            return delta<CXXTEST_T,CXXTEST_T,D>::test((CXXTEST_T)x,(CXXTEST_T)y, d); } }
+#endif
 
 #   define CXXTEST_INTEGRAL(CXXTEST_T) \
     CXXTEST_COMPARISONS( signed CXXTEST_T, unsigned CXXTEST_T, unsigned CXXTEST_T )
 
-    CXXTEST_INTEGRAL( char )
-    CXXTEST_INTEGRAL( short )
-    CXXTEST_INTEGRAL( int )
-    CXXTEST_INTEGRAL( long )
+    CXXTEST_INTEGRAL( char );
+    CXXTEST_INTEGRAL( short );
+    CXXTEST_INTEGRAL( int );
+    CXXTEST_INTEGRAL( long );
 #   ifdef _CXXTEST_LONGLONG
-    CXXTEST_INTEGRAL( _CXXTEST_LONGLONG )
+    CXXTEST_INTEGRAL( _CXXTEST_LONGLONG );
 #   endif // _CXXTEST_LONGLONG
 
 #   define CXXTEST_SMALL_BIG(CXXTEST_SMALL, CXXTEST_BIG) \
-    CXXTEST_COMPARISONS( signed CXXTEST_SMALL, unsigned CXXTEST_BIG, unsigned CXXTEST_BIG ) \
+    CXXTEST_COMPARISONS( signed CXXTEST_SMALL, unsigned CXXTEST_BIG, unsigned CXXTEST_BIG ); \
     CXXTEST_COMPARISONS( signed CXXTEST_BIG, unsigned CXXTEST_SMALL, unsigned CXXTEST_BIG )
 
-    CXXTEST_SMALL_BIG( char, short )    
-    CXXTEST_SMALL_BIG( char, int )
-    CXXTEST_SMALL_BIG( short, int )
-    CXXTEST_SMALL_BIG( char, long )
-    CXXTEST_SMALL_BIG( short, long )
-    CXXTEST_SMALL_BIG( int, long )
+    CXXTEST_SMALL_BIG( char, short );
+    CXXTEST_SMALL_BIG( char, int );
+    CXXTEST_SMALL_BIG( short, int );
+    CXXTEST_SMALL_BIG( char, long );
+    CXXTEST_SMALL_BIG( short, long );
+    CXXTEST_SMALL_BIG( int, long );
         
 #   ifdef _CXXTEST_LONGLONG
-    CXXTEST_SMALL_BIG( char, _CXXTEST_LONGLONG )
-    CXXTEST_SMALL_BIG( short, _CXXTEST_LONGLONG )
-    CXXTEST_SMALL_BIG( int, _CXXTEST_LONGLONG )
-    CXXTEST_SMALL_BIG( long, _CXXTEST_LONGLONG )
+    CXXTEST_SMALL_BIG( char, _CXXTEST_LONGLONG );
+    CXXTEST_SMALL_BIG( short, _CXXTEST_LONGLONG );
+    CXXTEST_SMALL_BIG( int, _CXXTEST_LONGLONG );
+    CXXTEST_SMALL_BIG( long, _CXXTEST_LONGLONG );
 #   endif // _CXXTEST_LONGLONG
 }
 
+#ifdef _CXXTEST_HAVE_STD
+#   include <cxxtest/StdTestSuite.h>
+#endif // _CXXTEST_HAVE_STD
+
 #endif // __cxxtest__TestSuite_h__
+

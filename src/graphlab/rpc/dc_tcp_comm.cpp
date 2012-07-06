@@ -103,6 +103,7 @@ namespace graphlab {
         portnums[i] = (uint16_t)(port);
       }
       network_bytessent = 0;
+      buffered_len = 0;
       // if sock handle is set
       std::map<std::string, std::string>::const_iterator iter = 
         initopts.find("__sockhandle__");
@@ -111,26 +112,34 @@ namespace graphlab {
       } else {
         open_listening();
       }
-      
       for(size_t i = 0;i < nprocs; ++i) connect(i); 
       // wait for all incoming connections
+      insock_lock.lock();
+      size_t prevconnected = -1;
       while(1) {
-        compile_barrier();
         size_t connected = 0;
         for (size_t i = 0;i < sock.size(); ++i) {
           connected += (sock[i].insock != -1);
         }
-        if (connected == sock.size()) break;
-        logstream(LOG_INFO) << "Waiting for " << sock.size() - connected 
+        if (connected == sock.size()) {
+          break;
+        }
+        if (prevconnected != connected) {
+          logstream(LOG_INFO) << curmachineid << ": Waiting for " << sock.size() - connected
                             << " more hosts..." << std::endl;
-        my_sleep(1);
+        }
+        prevconnected = connected;
+        insock_cond.wait(insock_lock);
       }
+      insock_lock.unlock();
       
       // everyone is connected.
       // Construct the eventbase
       iter = initopts.find("sockets_per_thread");
-      if (iter != initopts.end()) {
-        construct_events(atoi(iter->second.c_str()));
+     if (iter != initopts.end()) {
+        size_t sendsocks_per_thread = atoi(iter->second.c_str());
+        size_t recvsocks_per_thread = atoi(iter->second.c_str());
+        construct_events(sendsocks_per_thread, recvsocks_per_thread);
       }
       else {
         construct_events();
@@ -144,40 +153,51 @@ namespace graphlab {
       is_closed = false;
     }
 
-    void dc_tcp_comm::construct_events(size_t sockets_per_thread) {
-      if (sockets_per_thread == 0) sockets_per_thread = 1;
+    void dc_tcp_comm::construct_events(size_t send_sockets_per_thread, size_t recv_sockets_per_thread) {
+      send_sockets_per_thread += (send_sockets_per_thread == 0);
+      recv_sockets_per_thread += (recv_sockets_per_thread == 0); 
       int ret = evthread_use_pthreads();
       if (ret < 0) logstream(LOG_FATAL) << "Unable to initialize libevent with pthread support!" << std::endl;
       // number of evs to create.
-      size_t nevs = sock.size() / sockets_per_thread + (sock.size() % sockets_per_thread > 0);
-      inevbase.resize(nevs);
-      outevbase.resize(nevs);
-      out_timeouts.resize(nevs);
-      timeoutevents.resize(nevs);
-      sockets_per_thread = sock.size() / nevs + (sock.size() % nevs > 0);
-      for (size_t i = 0;i < nevs; ++i) {
-        inevbase[i] = event_base_new();
-        if (!inevbase[i]) logstream(LOG_FATAL) << "Unable to construct libevent base" << std::endl;
+      size_t n_send_evs = sock.size() / send_sockets_per_thread + (sock.size() % send_sockets_per_thread > 0);
+      size_t n_recv_evs = sock.size() / recv_sockets_per_thread + (sock.size() % recv_sockets_per_thread > 0);
+
+      inevbase.resize(n_recv_evs);
+      outevbase.resize(n_send_evs);
+      out_timeouts.resize(n_send_evs);
+      timeoutevents.resize(n_send_evs);
+      // update socks per thread to redistribute the events better
+      send_sockets_per_thread = sock.size() / n_send_evs + (sock.size() % n_send_evs > 0);
+      recv_sockets_per_thread = sock.size() / n_recv_evs + (sock.size() % n_recv_evs > 0);
+
+      for (size_t i = 0;i < n_send_evs; ++i) {
         outevbase[i] = event_base_new();
         if (!outevbase[i]) logstream(LOG_FATAL) << "Unable to construct libevent base" << std::endl;
         timeoutevents[i].owner = this;
-        timeoutevents[i].sockstart = i * sockets_per_thread;
-        timeoutevents[i].sockend = std::min(sock.size(), (i + 1) * sockets_per_thread);
+        timeoutevents[i].sockstart = i * send_sockets_per_thread;
+        timeoutevents[i].sockend = std::min(sock.size(), (i + 1) * send_sockets_per_thread);
         out_timeouts[i] = event_new(outevbase[i], -1, EV_TIMEOUT | EV_PERSIST, on_send_event, &(timeoutevents[i]));
-        struct timeval t = {0, 10};
+        struct timeval t = {0, 100};
         event_add(out_timeouts[i], &t);
       }
-      
+
+      for (size_t i = 0;i < n_recv_evs; ++i) {
+        inevbase[i] = event_base_new();
+        if (!inevbase[i]) logstream(LOG_FATAL) << "Unable to construct libevent base" << std::endl;
+      }
+
+
       //register all event objects
       for (size_t i = 0;i < sock.size(); ++i) {
-        size_t evid = i / sockets_per_thread;
-        sock[i].inevent = event_new(inevbase[evid], sock[i].insock, EV_READ | EV_PERSIST | EV_ET,
+        size_t ev_in_id = i / recv_sockets_per_thread;
+        size_t ev_out_id = i / send_sockets_per_thread;
+        sock[i].inevent = event_new(inevbase[ev_in_id], sock[i].insock, EV_READ | EV_PERSIST | EV_ET,
                                      on_receive_event, &(sock[i]));
         if (sock[i].inevent == NULL) {
           logstream(LOG_FATAL) << "Unable to register socket read event" << std::endl;
         }
 
-        sock[i].outevent = event_new(outevbase[evid], sock[i].outsock, EV_WRITE,
+        sock[i].outevent = event_new(outevbase[ev_out_id], sock[i].outsock, EV_WRITE,
                                      on_send_event, &(sock[i]));
         if (sock[i].outevent == NULL) {
           logstream(LOG_FATAL) << "Unable to register socket write event" << std::endl;
@@ -255,7 +275,6 @@ namespace graphlab {
       while(!sockinfo.outvec.empty()) {
         sockinfo.outvec.fill_msghdr(sockinfo.data);
         ssize_t ret = sendmsg(sockinfo.outsock, &sockinfo.data, 0);
-        // decrement the counter
         if (ret < 0) {
           END_TRACEPOINT(tcp_send_call);
           if (errno == EWOULDBLOCK || errno == EAGAIN) {
@@ -331,8 +350,11 @@ namespace graphlab {
                           << inet_ntoa(otheraddr->sin_addr) << std::endl;
       ASSERT_LT(id, all_addrs.size());
       ASSERT_EQ(all_addrs[id], addr);
+      insock_lock.lock();
       ASSERT_EQ(sock[id].insock, -1);
       sock[id].insock = newsock;
+      insock_cond.signal();
+      insock_lock.unlock();
       logstream(LOG_INFO) << "Proc " << procid() << " accepted connection "
                           << "from machine " << id << std::endl;
     }
@@ -389,10 +411,10 @@ namespace graphlab {
         bool success = false;
         for (size_t i = 0;i < 10; ++i) {
           if (::connect(newsock, (sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-            logstream(LOG_WARNING) 
+            logstream(LOG_INFO) 
               << "connect " << curid << " to " << target << ": "
               << strerror(errno) << ". Retrying...\n";
-            my_sleep(1);
+            timer::sleep(1);
             // posix says that 
             /* If connect() fails, the state of the socket is unspecified. 
                Conforming applications should close the file descriptor and 
@@ -400,7 +422,6 @@ namespace graphlab {
             ::close(newsock);
             newsock = socket(AF_INET, SOCK_STREAM, 0);
             set_tcp_no_delay(newsock);
-
           } else {
             // send my machine id
             sendtosock(newsock, reinterpret_cast<char*>(&curid), sizeof(curid));
@@ -439,7 +460,7 @@ namespace graphlab {
         // wait for incoming event
         poll(&pf, 1, 1000);
         // if we have a POLLIN, we have an incoming socket request
-        if (pf.revents && POLLIN) {
+        if (pf.revents & POLLIN) {
           logstream(LOG_INFO) << "Accepting...." << std::endl;
           // accept the socket
           sockaddr_in their_addr;
@@ -455,13 +476,32 @@ namespace graphlab {
           procid_t remotemachineid = (procid_t)(-1);
           ssize_t msglen = 0;
           while(msglen != sizeof(procid_t)) {
-            msglen += recv(newsock, (char*)(&remotemachineid) + msglen, 
+            int retval = recv(newsock, (char*)(&remotemachineid) + msglen,
                            sizeof(procid_t) - msglen, 0);
+            if (retval < 0) {
+              if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                continue;
+              }
+              else {
+                logstream(LOG_FATAL) << "error: " << errno <<  " receive error: " << strerror(errno) << std::endl;
+              }
+            }
+            else if (retval > 0) {
+              msglen += retval;
+            }
+            else if (retval == 0) {
+              std::cout << "error: connection dropped." << std::endl;
+              ::close(newsock);
+              newsock = -1;
+              break;
+            }
           }
-          // register the new socket
-          set_non_blocking(newsock);
-          new_socket(newsock, &their_addr, remotemachineid);
-          ++numsocks_connected;
+          if (newsock != -1) {
+            // register the new socket
+            set_non_blocking(newsock);
+            new_socket(newsock, &their_addr, remotemachineid);
+            ++numsocks_connected;
+          }
         }
         if (listensock == -1) {
           // the owner has closed
@@ -520,7 +560,7 @@ namespace graphlab {
 
 
     void dc_tcp_comm::check_for_new_data(dc_tcp_comm::socket_info& sockinfo) {
-      sender[sockinfo.id]->get_outgoing_data(sockinfo.outvec);
+      buffered_len.inc(sender[sockinfo.id]->get_outgoing_data(sockinfo.outvec));
     }
     
 
@@ -550,6 +590,7 @@ namespace graphlab {
           comm->check_for_new_data(*sockinfo);
           if (!sockinfo->outvec.empty()) {
             comm->send_till_block(*sockinfo);
+
           }
           else {
             break;
