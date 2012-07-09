@@ -1,0 +1,24 @@
+/**
+
+\page collaborative_filtering Collaborative Filtering
+
+
+\brief The collaborative filtering toolkit contains tools for doing ...
+
+
+The collaborative filtering toolkit currently contains:
+
+ -Alternating Least Squares
+ -SGD
+
+In the future we hope to implement:
+ 
+ -SVD, SVD++
+
+\section matrix_factorization Matrix Factorization
+
+
+
+*/
+
+
