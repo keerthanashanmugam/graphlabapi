@@ -46,6 +46,10 @@
 
 typedef Eigen::VectorXd vec_type;
 typedef Eigen::MatrixXd mat_type;
+
+//when using negative node id range, we are not allowed to use
+//0 and 1 so we add 2.
+const static int SAFE_NEG_OFFSET=2;
 static bool debug;
 int iter = 0;
 /** 
@@ -264,7 +268,8 @@ public:
       const float err = (pred - edge.data().obs);
       if (debug)
         std::cout<<"entering edge " << (int)edge.source().id() << ":" << (int)edge.target().id() << " err: " << err << " rmse: " << err*err <<std::endl;
-      assert(!std::isnan(err));
+      if (std::isnan(err))
+        logstream(LOG_FATAL)<<"Got into numeric errors.. try to tune step size and regularization using --lambda and --gamma flags" << std::endl;
       if (edge.data().role == edge_data::TRAIN){
 
         bias = -GAMMA*(err - LAMBDA*bias);
@@ -380,11 +385,11 @@ struct error_aggregator : public graphlab::IS_POD_TYPE {
     ASSERT_GT(agg.ntrain, 0);
     const double train_error = std::sqrt(agg.train_error / agg.ntrain);
     assert(!std::isnan(train_error));
-    context.cout() << context.elapsed_seconds() << "\t" << train_error;
+    context.cout() << std::setw(8) << context.elapsed_seconds() << std::setw(8) << train_error;
     if(agg.nvalidation > 0) {
       const double validation_error = 
         std::sqrt(agg.validation_error / agg.nvalidation);
-      context.cout() << "\t" << validation_error; 
+      context.cout() << std::setw(8) << validation_error; 
     }
     context.cout() << std::endl;
     biassgd_vertex_program::GAMMA *= biassgd_vertex_program::STEP_DEC;
@@ -421,7 +426,7 @@ struct prediction_saver {
     const double prediction = 
       edge.source().data().pvec.dot(edge.target().data().pvec);
     strm << edge.source().id() << '\t' 
-         << edge.target().id() << '\t'
+         << -edge.target().id()-SAFE_NEG_OFFSET << '\t'
          << prediction << '\n';
     return strm.str();
   }
@@ -445,15 +450,15 @@ inline bool graph_loader(graph_type& graph,
   graph_type::vertex_id_type source_id(-1), target_id(-1);
   float obs(0);
   strm >> source_id >> target_id;
-  if (source_id > biassgd_vertex_program::USERS)
-    logstream(LOG_FATAL)<<"User is: " << source_id << " larger than maximal user id: " << biassgd_vertex_program::USERS << " please fix maximal number of users using --users=XX" << std::endl;
 
    if(role == edge_data::TRAIN || role == edge_data::VALIDATE) 
     strm >> obs;
   if (obs < biassgd_vertex_program::MINVAL || obs > biassgd_vertex_program::MAXVAL)
     logstream(LOG_FATAL)<<"Rating values should be between " << biassgd_vertex_program::MINVAL << " and " << biassgd_vertex_program::MAXVAL << ". Got value: " << obs << " [ user: " << source_id << " to item: " <<target_id << " ] " << std::endl; 
+  
+  target_id = -(graphlab::vertex_id_type(target_id + SAFE_NEG_OFFSET));
   // Create an edge and add it to the graph
-  graph.add_edge(source_id, target_id+biassgd_vertex_program::USERS, edge_data(obs, role)); 
+  graph.add_edge(source_id, target_id, edge_data(obs, role)); 
   return true; // successful load
 } // end of graph_loader
 
