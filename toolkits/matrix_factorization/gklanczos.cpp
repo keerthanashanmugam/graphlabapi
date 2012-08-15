@@ -306,6 +306,8 @@ printf("\n");
   }
 
   if (save_vectors){
+     if (nconv == 0)
+       logstream(LOG_FATAL)<<"No converged vectors. Aborting the save operation" << std::endl;
      for (int i=0; i< nconv; i++){
         write_output_vector(datafile + ".U." + boost::lexical_cast<std::string>(i), format, U[i].to_vec(), false, "GraphLab v2 SVD output. This file contains eigenvector number " + boost::lexical_cast<std::string>(i) + " of the matrix U");
         write_output_vector(datafile + ".V." + boost::lexical_cast<std::string>(i), format, V[i].to_vec(), false, "GraphLab v2 SVD output. This file contains eigenvector number " + boost::lexical_cast<std::string>(i) + " of the matrix V'");
