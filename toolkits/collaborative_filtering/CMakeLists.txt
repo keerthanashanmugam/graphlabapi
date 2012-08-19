@@ -1,0 +1,23 @@
+project(GraphLab)
+# include(CheckCXXSourceCompiles)
+
+
+
+# Build als
+add_graphlab_executable(als als.cpp)
+requires_eigen(als) # build and attach eigen
+
+add_graphlab_executable(sgd sgd.cpp)
+requires_eigen(sgd) # build and attach eigen
+
+add_graphlab_executable(biassgd biassgd.cpp)
+requires_eigen(biassgd) # build and attach eigen
+
+add_graphlab_executable(svd svd.cpp)
+requires_eigen(svd) # build and attach eigen
+
+add_graphlab_executable(make_synthetic_als_data
+  make_synthetic_als_data.cpp)
+requires_eigen(make_synthetic_als_data) # build and attach eigen
+
+
