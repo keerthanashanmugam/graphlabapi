@@ -782,7 +782,6 @@ namespace graphlab {
                             const message_type& message) {
       if (force_stop) return;
       const lvid_type local_vid = graph.local_vid(vid);
-      BEGIN_TRACEPOINT(disteng_scheduler_task_queue);
       bool direct_injection = false;
       // if the vertex is still in the locking state
       // it has not received the message yet.
@@ -801,7 +800,6 @@ namespace graphlab {
       if (direct_injection == false) {
         scheduler_ptr->schedule(local_vid, message);
       }
-      END_TRACEPOINT(disteng_scheduler_task_queue);
       consensus->cancel();
     }
 
@@ -835,11 +833,9 @@ namespace graphlab {
                          const message_type& message = message_type()) {
       if (force_stop) return;
       if (started) {
-        BEGIN_TRACEPOINT(disteng_scheduler_task_queue);
         scheduler_ptr->schedule_from_execution_thread(thread::thread_id(),
                                                       vtx.local_id(), message);
         consensus->cancel();
-        END_TRACEPOINT(disteng_scheduler_task_queue);
       }
       else {
         scheduler_ptr->schedule(vtx.local_id(), message);
