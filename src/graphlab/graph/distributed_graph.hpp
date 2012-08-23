@@ -377,7 +377,11 @@ namespace graphlab {
     typedef graphlab::vertex_id_type vertex_id_type;
     typedef graphlab::lvid_type lvid_type;
     typedef graphlab::edge_id_type edge_id_type;
-    
+
+    // typedef boost::unordered_map<vertex_id_type, lvid_type> vid2lvid_map_type;
+    typedef cuckoo_map_pow2<vertex_id_type, lvid_type, 3, uint32_t> cuckoo_map_type;
+    typedef cuckoo_map_type vid2lvid_map_type;
+
     struct vertex_type;
     typedef bool edge_list_type;  
     class edge_type;
@@ -2000,8 +2004,8 @@ namespace graphlab {
     typedef typename json_parser_type::edge_parser_type edge_parser_type;
     typedef typename json_parser_type::vertex_parser_type vertex_parser_type;
     void load_json (const std::string& prefix, bool gzip=false, 
-        edge_parser_type edge_parser = builtin_parsers::empty_edge_parser<EdgeData>, 
-        vertex_parser_type vertex_parser = builtin_parsers::empty_vertex_parser<VertexData>
+        vertex_parser_type vertex_parser = builtin_parsers::empty_parser<VertexData>,
+        edge_parser_type edge_parser = builtin_parsers::empty_parser<EdgeData>
        ) {
       rpc.full_barrier();
       json_parser<VertexData, EdgeData> jsonparser(*this, prefix, gzip, edge_parser, vertex_parser);
@@ -2523,13 +2527,8 @@ namespace graphlab {
     /** The map from global vertex ids to vertex records */
     std::vector<vertex_record>  lvid2record;
     
-    // boost::unordered_map<vertex_id_type, lvid_type> vid2lvid;
-    /** The map from global vertex ids back to local vertex ids */
-    typedef cuckoo_map_pow2<vertex_id_type, lvid_type, 3, uint32_t> cuckoo_map_type;
-    typedef cuckoo_map_type vid2lvid_map_type;
-
-    cuckoo_map_type vid2lvid;
-
+   /** The map from global vertex ids back to local vertex ids */
+    vid2lvid_map_type vid2lvid;
         
     /** The global number of vertices and edges */
     size_t nverts, nedges;

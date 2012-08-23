@@ -47,6 +47,7 @@
 #include <graphlab/graph/distributed_graph.hpp>
 #include <graphlab/graph/ingress/distributed_identity_ingress.hpp>
 
+#include <graphlab/macros_def.hpp>
 namespace graphlab {
 
   /** Builtin parsers for common datatypes: empty, string, int, float, double. */
@@ -56,25 +57,12 @@ namespace graphlab {
       return true;
     }
 
-    bool string_parser(string& i, const std::string& line) {
+    template <typename T>
+    bool simple_parser(T& e, const std::string& line) {
+      e = boost::lexical_cast<T>(line);
       return true;
     }
-
-    bool int_parser(int& i, const std::string& line) {
-      i = boost::lexical_cast<int>(line);
-      return true;
-    }
-
-    bool float_parser(float& i, const std::string& line) {
-      i = boost::lexical_cast<float>(line);
-      return true;
-    }
-
-    bool double_parser(float& i, const std::string& line) {
-      i = boost::lexical_cast<double>(line);
-      return true;
-    }
-  }
+  } // end of namespace builtin_parsers
 
 
 template<typename VertexData, typename EdgeData>
@@ -104,16 +92,18 @@ class json_parser {
       vertex_parser_type vertex_parser=builtin_parsers::empty_parser<VertexData>) :
     graph(graph), prefix(prefix), gzip(gzip), edge_parser(edge_parser), vertex_parser(vertex_parser) {}
 
-  const std::string basepath() {
+  const std::string basepath() const {
     return prefix;
   }
 
-  const std::string vrecordpath() {
-    return fs_util::concat_path(basepath(), "partitionedvrec/partition" + graph.procid());
+  const std::string vrecordpath() const {
+    std::string tmp = fs_util::concat_path(basepath(), "vrecords/partition");
+    return tmp + boost::lexical_cast<std::string>(graph.procid());
   }
 
-  const std::string edgepath() {
-    return fs_util::concat_path(basepath(), "partitionededge/partition" + graph.procid());
+  const std::string edgepath() const {
+    std::string tmp = fs_util::concat_path(basepath(), "edges/partition");
+    return tmp + boost::lexical_cast<std::string>(graph.procid());
   }
 
 
@@ -177,18 +167,22 @@ class json_parser {
    * Next, it loads each subpartition of edges which include a list of source target pair and a json array of edge data. 
    * */
   bool load() {
+
+    logstream(LOG_DEBUG) << basepath() << std::endl;
+    logstream(LOG_DEBUG) << vrecordpath() << std::endl;
+    logstream(LOG_DEBUG) << edgepath() << std::endl;
     bool success = load_vrecords(vrecordpath());
 
     // Scan the directory conatining subpartitions.
     std::vector<std::string> subpart_dirs;
-    list_files_with_prefix(edgepath(), "subpart", subpart_dirs);
+    fs_util::list_files_with_prefix(edgepath(), "subpart", subpart_dirs, true);
     foreach(std::string dirname, subpart_dirs) {
       // Load each sub partition.
-      success &= load_subpartition(fs_util::concat_path(edgepath(), dirname)); 
+      success &= load_subpart(dirname); 
     }
 
     if (!success) {
-      logstream(LOG_FATAL) << "Fail parsing graph json" << std::endl;
+      logstream(LOG_FATAL) << "Fail loading partition " << graph.procid() << std::endl;
       return false;
     }
 
@@ -199,6 +193,7 @@ class json_parser {
     ASSERT_EQ(graph.lvid2record.size(), graph.local_graph.num_vertices());
 
     logstream(LOG_INFO) << "Finished loading graph" << graph.procid() 
+
       << "\n\tnverts: " << graph.num_local_own_vertices() 
       << "\n\tnreplicas: " << graph.local_graph.num_vertices() 
       << "\n\tnedges: " << graph.local_graph.num_edges() 
@@ -225,9 +220,10 @@ class json_parser {
      // load meta files
      size_t num_vertices = 0;
      size_t num_own_vertices = 0;
-     success = parse_by_line(fs_util::concat_path(path, "meta"), boost::bind(parse_vrecord_meta, num_vertices, num_own_vertices, _1));
+     success = parse_by_line(fs_util::concat_path(path, "meta-00000"), boost::bind(parse_vrecord_meta, boost::ref(num_vertices), boost::ref(num_own_vertices), _1));
+     logstream(LOG_DEBUG) << "Done parsing vrecord meta. numVertices: " << num_vertices << " numOwnVertices: " << num_own_vertices << std::endl;
      if (success) {
-       graph.vid2lvid.reserve(num_vertices);
+       // graph.vid2lvid.reserve(num_vertices);
        graph.lvid2record.reserve(num_vertices);
        graph.lvid2record.resize(num_vertices);
      } else {
@@ -236,13 +232,13 @@ class json_parser {
 
      // load vrecord files
     std::vector<std::string> vrecfiles;
-    list_files_with_prefix(path, "vrecord", vrecfiles);
-    line_parser_type vrecord_parser = boost::bind(parse_vrecord, graph, _1, vertex_parser);
+    fs_util::list_files_with_prefix(path, "vrecord", vrecfiles);
+    line_parser_type vrecord_parser = boost::bind(parse_vrecord, boost::ref(graph), _1, vertex_parser);
     foreach(std::string file, vrecfiles) {
       success &= parse_by_line(file, vrecord_parser); 
     }
 
-    ASSERT_EQ(graph.local_own_vertices, num_own_vertices);
+    ASSERT_EQ(graph.num_local_own_vertices(), num_own_vertices);
     return success;
   }
 
@@ -267,34 +263,42 @@ class json_parser {
     bool success = true;
 
     size_t numEdges = 0;
-    // Load meta file.
-    const std::string metapath = fs_util::concat_path(path, "meta");
-
-    // Load edge data.
-    const std::string edatapath = fs_util::concat_path(path, "edata");
-    success &= parse_by_line(edatapath, boost::bind(parse_edata, edata_arr, _1, edge_parser));
-
-    if (!success)  return false;
-
     std::vector<lvid_type> source_arr;
     std::vector<lvid_type> target_arr;
-    std::vector<lvid_type> edata_arr;
+    std::vector<EdgeData> edata_arr;
+
+    // Load meta file.
+    const std::string metapath = fs_util::concat_path(path, "meta-00000");
+    success &= parse_by_line(metapath, boost::bind(parse_subpart_meta, boost::ref(numEdges), _1));
+
+    logstream(LOG_DEBUG) << "Done parsing elist meta. numEdges: " << numEdges << std::endl;
+
     source_arr.reserve(numEdges);
     target_arr.reserve(numEdges);
     edata_arr.reserve(numEdges);
 
+    // Load edge data.
+    const std::string edatapath = fs_util::concat_path(path, "edata-00000");
+    if (success) 
+      success &= parse_by_line(edatapath, boost::bind(parse_edata, boost::ref(edata_arr), _1, edge_parser));
+
     // Load edge list.
-    const std::string edgelistpath = fs_util::concat_path(path, "elist");
-    success &= parse_by_line(edgelistpath, 
-        boost::bind(parse_edge_list, graph.vid2lvid, source_arr, target_arr, _1)); 
+    const std::string edgelistpath = fs_util::concat_path(path, "edgelist-00000");
+    if (success)
+      success &= parse_by_line(edgelistpath, 
+        boost::bind(parse_edge_list, boost::ref(graph.vid2lvid), boost::ref(source_arr), boost::ref(target_arr), _1)); 
 
+    ASSERT_EQ(source_arr.size(), numEdges);
+    ASSERT_EQ(target_arr.size(), numEdges);
+    ASSERT_EQ(edata_arr.size(), numEdges);
     // Atomically modify the graph.
-    graph_lock.lock();
-      size_t oldsize = local_graph.num_edges();
-      local_graph.reserve_edge_space(oldsize + numEdges);
-      local_graph.add_edges(source_arr, target_arr, edata_arr);
-    graph_lock.unlock();
-
+    if (success) {
+      graph_lock.lock();
+        size_t oldsize = graph.local_graph.num_edges();
+        graph.local_graph.reserve_edge_space(oldsize + numEdges);
+        graph.local_graph.add_edges(source_arr, target_arr, edata_arr);
+      graph_lock.unlock();
+    }
     return success;
   }
 
@@ -316,9 +320,11 @@ class json_parser {
       } else {
         logstream(LOG_WARNING) 
           << "Unknown field of vrecord meta: " 
-          << i->name();
+          << i->name() << std::endl
+          << "Line: " << str << std::endl;
         success = false;
       }
+      i++;
     }
     return success;
   }
@@ -363,16 +369,17 @@ class json_parser {
           vertex_parser(vdata, i->as_string());
       } else {
         logstream(LOG_ERROR) << "Error parsing json into vrecord. Unknown json node name:" <<
-          i->name() << std::endl;
+          i->name() << std::endl << "Line: " << str << std::endl;
       }
       ++i;
     }
 
-    if (!graph.vid2lvid.find(vrecord.gvid) == graph.vid2lvid.end()) {
+    if (graph.vid2lvid.find(vrecord.gvid) != graph.vid2lvid.end()) {
       logstream(LOG_WARNING) << "Duplicate vertex record : gvid = " << vrecord.gvid << ". Ignored" << std::endl;
     } else {
-      lvid_type lvid = vid2lvid.size();
+      lvid_type lvid = graph.vid2lvid.size();
       graph.vid2lvid[vrecord.gvid] = lvid;
+      ASSERT_LT(lvid, graph.lvid2record.size());
       graph.lvid2record[lvid] = vrecord;
       local_graph.add_vertex(lvid, vdata);
       if (vrecord.owner == graph.procid()) ++graph.local_own_nverts;
@@ -394,9 +401,11 @@ class json_parser {
       } else {
         logstream(LOG_WARNING) 
           << "Unknown field of edge meta: " 
-          << i->name();
+          << i->name() << std::endl
+          << "Line: " << str << std::endl;
         success = false;
       }
+      i++;
     }
     return success;
   }
@@ -406,7 +415,7 @@ class json_parser {
    * and inserted into source_arr, and target_arr. 
    * Assumption: require vid2lvid map. 
    * */
-  static bool parse_edge_list(const vid2lvid_map_type& map, 
+  static bool parse_edge_list(vid2lvid_map_type& map, 
       std::vector<lvid_type>& source_arr, 
       std::vector<lvid_type>& target_arr,
       const std::string& str) {
@@ -414,35 +423,40 @@ class json_parser {
     JSONNode::const_iterator i = n.begin();
 
     lvid_type source(-1);
-    lvid_type target(-1);
 
     while(i != n.end()) {
       if (i->name() == "source") {
-        if (map.find(i->as_int()) == map.end()) {
+        vertex_id_type sourceid = boost::lexical_cast<vertex_id_type>(i->as_string());
+        if (map.find(sourceid) == map.end()) {
           logstream(LOG_ERROR) 
             << "Unknown vid from adjcency list: gvid = " 
-            << i->as_int() << std::endl;
+            << sourceid << std::endl 
+            << "Line: " << str << std::endl;
           return false;
         } else {
-          source = map[i->as_int()];
+          source = map[sourceid];
         }
       } else if (i->name() == "targets") {
         if (i->type() != JSON_ARRAY) {
           logstream(LOG_ERROR)
-            << "Type of targets is not JSON_ARRAY" << std::endl;
+            << "Type of targets is not JSON_ARRAY" << std::endl
+            << "Line: " << str << std::endl;
           return false;
         } else {
           JSONNode::const_iterator iter = i->begin();
           while (iter != i->end()) {
-            if (map.find(iter->as_int()) == map.end()) {
+            vertex_id_type targetid = boost::lexical_cast<vertex_id_type>(iter->as_string());
+            if (map.find(targetid) == map.end()) {
               logstream(LOG_ERROR) 
                 << "Unknown vid from adjcency list: gvid = " 
-                << iter->as_int() << std::endl;
+                << targetid << std::endl
+                << "Line: " << str << std::endl;
               return false;
             } else {
               source_arr.push_back(source);
-              target_arr.push_back(map[iter->as_int()]);
+              target_arr.push_back(map[targetid]);
             }
+            ++iter;
           }
         }
       } 
@@ -456,21 +470,23 @@ class json_parser {
     JSONNode n = libjson::parse(str);
     JSONNode::const_iterator i = n.begin();
     while(i != n.end()) {
-       if (i->type() == JSON_ARRAY) {
+       // if (i->type() == JSON_ARRAY) {
         // parse  edatalist -> graph.local_graph.gstore.edata
-        JSONNode::const_iterator j = i->begin();
+        // JSONNode::const_iterator j = i->begin();
         edge_data_type e;
-        while (j != i->end()) {
-          edge_parser(e, j->as_string());
+        // while (j != i->end()) {
+          edge_parser(e, i->as_string());
           edata_arr.push_back(e);
-          ++j;
-        }
-       } else {
-         logstream(LOG_ERROR) 
-            << "Error in parsing edata. Unknown field name : "
-            << i->name() << std::endl;
-         return false;
-       }
+          // ++j;
+        // }
+       // } else {
+       //   logstream(LOG_ERROR) 
+       //      << "Error in parsing edata. Unknown type : "
+       //      << boost::lexical_cast<std::string>(i->type()) << std::endl
+       //      << "JSON_ARRAY type: " << boost::lexical_cast<std::string>(JSON_ARRAY) << std::endl
+       //      << "Line: " << str << std::endl;
+       //   return false;
+       // }
       ++i;
     }
     return true;
@@ -512,6 +528,7 @@ class json_parser {
 
 
   private:
+    mutex graph_lock;
     graph_type& graph;
     std::string prefix;
     bool gzip;
@@ -521,4 +538,6 @@ class json_parser {
 
 
 } // namespace graphlab
+
+#include <graphlab/macros_undef.hpp>
 #endif
