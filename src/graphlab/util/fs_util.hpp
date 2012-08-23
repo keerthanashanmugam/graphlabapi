@@ -47,7 +47,8 @@ namespace graphlab {
      */
     void list_files_with_prefix(const std::string& pathname,
                                 const std::string& prefix,
-                                std::vector<std::string>& files);
+                                std::vector<std::string>& files,
+                                bool includedir = false);
 
     /**
      * Concatenation two string to form a legal filesystem path by 
