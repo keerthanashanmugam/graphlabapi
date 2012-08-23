@@ -117,6 +117,15 @@ list_files_with_prefix(const std::string& pathname,
 } // end of list files with prefix
 
 
+std::string graphlab::fs_util::
+concat_path(const std::string& base,
+            const std::string& suffix) {
+  if (!boost::algorithm::ends_with(base, "/")) {
+    return base + "/" +  suffix;
+  } else {
+    return base + suffix;
+  }
+}
 
 
 
