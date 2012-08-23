@@ -48,3 +48,5 @@ add_graphlab_executable(sfinae_function_test sfinae_function_test.cpp)
 
 
 add_graphlab_executable(mini_web_server mini_web_server.cpp)
+
+add_graphlab_executable(graph_load_test graph_load_test.cpp)
