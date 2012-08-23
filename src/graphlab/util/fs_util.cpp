@@ -96,7 +96,8 @@ list_files_with_suffix(const std::string& pathname,
 void graphlab::fs_util::
 list_files_with_prefix(const std::string& pathname,
                        const std::string& prefix,
-                       std::vector<std::string>& files) {
+                       std::vector<std::string>& files,
+                       bool includedir) {
   namespace fs = boost::filesystem;  
   fs::path dir_path(pathname);
   fs::directory_iterator end_iter;
@@ -104,7 +105,7 @@ list_files_with_prefix(const std::string& pathname,
   if ( fs::exists(dir_path) && fs::is_directory(dir_path)) {
     for( fs::directory_iterator dir_iter(dir_path) ; 
          dir_iter != end_iter ; ++dir_iter) {
-      if (fs::is_regular_file(dir_iter->status()) ) {
+      if (includedir || fs::is_regular_file(dir_iter->status()) ) {
         const std::string filename = dir_iter->path().filename().string();
         if (prefix.size() > 0 && !boost::starts_with(filename, prefix)) {
           continue;
@@ -117,6 +118,15 @@ list_files_with_prefix(const std::string& pathname,
 } // end of list files with prefix
 
 
+std::string graphlab::fs_util::
+concat_path(const std::string& base,
+            const std::string& suffix) {
+  if (!boost::algorithm::ends_with(base, "/")) {
+    return base + "/" +  suffix;
+  } else {
+    return base + suffix;
+  }
+}
 
 
 
