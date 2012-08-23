@@ -49,10 +49,18 @@ namespace graphlab {
                                 const std::string& prefix,
                                 std::vector<std::string>& files);
 
+    /**
+     * Concatenation two string to form a legal filesystem path by 
+     * checking the trailing "/" of the first string.
+     */
+    std::string concat_path(const std::string& base,
+                                     const std::string& suffix);
+
 
     /// \ingroup util_internal
     std::string change_suffix(const std::string& fname,
                                      const std::string& new_suffix);
+
 
   }; // end of fs_utils
 

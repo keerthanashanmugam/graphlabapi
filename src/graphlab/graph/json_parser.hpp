@@ -1,4 +1,4 @@
- /**
+/**
  * Copyright (c) 2009 Carnegie Mellon University.
  *     All rights reserved.
  *
@@ -40,6 +40,7 @@
 
 #include <boost/functional.hpp>
 #include <graphlab/util/stl_util.hpp>
+#include <graphlab/util/fs_util.hpp>
 #include <graphlab/util/hdfs.hpp>
 #include <graphlab/logger/logger.hpp>
 #include <graphlab/serialization/serialization_includes.hpp>
@@ -48,19 +49,32 @@
 
 namespace graphlab {
 
+  /** Builtin parsers for common datatypes: empty, string, int, float, double. */
   namespace builtin_parsers {
-    template <typename EdgeData>
-    bool empty_edge_parser(EdgeData& e, const std::string& line) {
+    template <typename T>
+    bool empty_parser(T& e, const std::string& line) {
       return true;
     }
 
-    template <typename VertexData>
-    bool empty_vertex_parser(VertexData& v, const std::string& line) {
+    bool string_parser(string& i, const std::string& line) {
       return true;
     }
 
+    bool int_parser(int& i, const std::string& line) {
+      i = boost::lexical_cast<int>(line);
+      return true;
+    }
+
+    bool float_parser(float& i, const std::string& line) {
+      i = boost::lexical_cast<float>(line);
+      return true;
+    }
+
+    bool double_parser(float& i, const std::string& line) {
+      i = boost::lexical_cast<double>(line);
+      return true;
+    }
   }
-
 
 
 template<typename VertexData, typename EdgeData>
@@ -77,44 +91,112 @@ class json_parser {
 
     typedef typename graph_type::vertex_id_type vertex_id_type;
     typedef typename graph_type::lvid_type lvid_type;
+    typedef typename graph_type::vid2lvid_map_type vid2lvid_map_type;
 
     typedef boost::function<bool(edge_data_type&, const std::string&)> edge_parser_type;
     typedef boost::function<bool(vertex_data_type&, const std::string&)> vertex_parser_type;
-    typedef boost::function<bool(graph_type&, const std::string&)> line_parser_type;
+    typedef boost::function<bool(const std::string&)> line_parser_type;
 
 
   public:
   json_parser (graph_type& graph, const std::string& prefix, bool gzip=false,
-      edge_parser_type edge_parser=builtin_parsers::empty_edge_parser<EdgeData>,
-      vertex_parser_type vertex_parser=builtin_parsers::empty_vertex_parser<VertexData>) :
-    graph(graph), prefix(prefix), gzip(gzip), edge_parser(edge_parser), vertex_parser(vertex_parser) {
+      edge_parser_type edge_parser=builtin_parsers::empty_parser<EdgeData>,
+      vertex_parser_type vertex_parser=builtin_parsers::empty_parser<VertexData>) :
+    graph(graph), prefix(prefix), gzip(gzip), edge_parser(edge_parser), vertex_parser(vertex_parser) {}
+
+  const std::string basepath() {
+    return prefix;
+  }
+
+  const std::string vrecordpath() {
+    return fs_util::concat_path(basepath(), "partitionedvrec/partition" + graph.procid());
+  }
+
+  const std::string edgepath() {
+    return fs_util::concat_path(basepath(), "partitionededge/partition" + graph.procid());
+  }
+
+
+  /** Main utility function. 
+   * Run the given line_parser independently on each line of the file. 
+   * */
+  bool parse_by_line (const std::string& path, line_parser_type line_parser) {
+    logstream(LOG_INFO) << "Load " << path << std::endl;
+
+    boost::iostreams::filtering_stream<boost::iostreams::input> fin;
+    // loading from hdfs
+    if (boost::starts_with(prefix, "hdfs://")) {
+      graphlab::hdfs& hdfs = hdfs::get_hdfs();
+      graphlab::hdfs::fstream in_file(hdfs, path);
+      if (!in_file.good()) {
+        logstream(LOG_FATAL) << "Fail to open file " << path << std::endl;
+        return false;
+      }
+
+      if (gzip) fin.push(boost::iostreams::gzip_decompressor());
+      fin.push(in_file);
+
+      if (!fin.good()) {
+        logstream(LOG_FATAL) << "Fail to read from stream " << path << std::endl;
+        return false;
+      }
+
+      load_from_stream(path, fin, line_parser);
+
+      if (gzip) fin.pop();
+      fin.pop();
+    } else { // loading from disk
+      std::ifstream in_file(path.c_str(),
+          std::ios_base::in | std::ios_base::binary);
+
+      if (!in_file.good()) {
+        logstream(LOG_FATAL) << "Fail to open file " << path << std::endl;
+        return false;
+      }
+
+      if (gzip) fin.push(boost::iostreams::gzip_decompressor());
+      fin.push(in_file);
+
+      if (!fin.good()) {
+        logstream(LOG_FATAL) << "Fail to read from stream " << path << std::endl;
+        return false;
+      }
+
+      load_from_stream(path, fin, line_parser);
+
+      if (gzip) fin.pop();
+      fin.pop();
     }
 
+    return true;
+  }
 
+  /** 
+   * Load the graph by loading the current partition.
+   * The function first calls load_vrecord_list to load the all vertices that belong to this partition. 
+   * Next, it loads each subpartition of edges which include a list of source target pair and a json array of edge data. 
+   * */
   bool load() {
-    line_parser_type graph_structure_parser = parse_graph_structure_from_json;
-    line_parser_type vid2lvid_parser = parse_vid2lvid_from_json;
-    line_parser_type edata_parser = boost::bind(parse_edatalist_from_json, _1, _2, edge_parser);
-    line_parser_type vrecord_parser = boost::bind(parse_vrecord_from_json, _1, _2, vertex_parser);
+    bool success = load_vrecords(vrecordpath());
 
-    bool success = parse_by_line(graphfilename(), graph_structure_parser);
-    success = success & parse_by_line(vid2lvidfilename(), vid2lvid_parser); 
-    success = success & parse_by_line(edatafilename(), edata_parser); 
-    success = success & parse_by_line(vrecordfilename(), vrecord_parser);
+    // Scan the directory conatining subpartitions.
+    std::vector<std::string> subpart_dirs;
+    list_files_with_prefix(edgepath(), "subpart", subpart_dirs);
+    foreach(std::string dirname, subpart_dirs) {
+      // Load each sub partition.
+      success &= load_subpartition(fs_util::concat_path(edgepath(), dirname)); 
+    }
 
     if (!success) {
       logstream(LOG_FATAL) << "Fail parsing graph json" << std::endl;
       return false;
     }
 
-    graph.local_graph.finalized = true;
+    graph.local_graph.finalize();
 
-    
     ASSERT_GE(graph.local_graph.num_vertices(), graph.local_graph.gstore.num_vertices);
     ASSERT_EQ(graph.vid2lvid.size(), graph.local_graph.num_vertices());
     ASSERT_EQ(graph.lvid2record.size(), graph.local_graph.num_vertices());
-
-
 
     logstream(LOG_INFO) << "Finished loading graph" << graph.procid() 
       << "\n\tnverts: " << graph.num_local_own_vertices() 
@@ -122,231 +204,132 @@ class json_parser {
       << "\n\tnedges: " << graph.local_graph.num_edges() 
       << std::endl;
 
-
+    // Exchange local stats and construct global info.
     if (graph.ingress_ptr == NULL) {
       graph.ingress_ptr = new distributed_identity_ingress<VertexData, EdgeData>(graph.rpc.dc(), graph);
     }
-
     graph.ingress_ptr->exchange_global_info();
     delete graph.ingress_ptr;
-
 
     graph.finalized = true;
     return success;
   }
 
-  bool parse_by_line (const std::string& srcfilename, line_parser_type line_parser) {
-    std::string fname;
-    //check for "/" ending in directory"
-    if(!boost::ends_with(prefix,"/"))
-        fname = prefix + "/" + srcfilename;
-    else 
-        fname = prefix + srcfilename;
+  /** Load the vrecords for this partition.   
+   * The vrecord file contains a sequence of files, each having
+   * a list of vertex records.
+   * */
+  bool load_vrecords(const std::string& path) {
+     bool success = true;
 
-    logstream(LOG_INFO) << "Load graph json from " << fname << std::endl;
+     // load meta files
+     size_t num_vertices = 0;
+     size_t num_own_vertices = 0;
+     success = parse_by_line(fs_util::concat_path(path, "meta"), boost::bind(parse_vrecord_meta, num_vertices, num_own_vertices, _1));
+     if (success) {
+       graph.vid2lvid.reserve(num_vertices);
+       graph.lvid2record.reserve(num_vertices);
+       graph.lvid2record.resize(num_vertices);
+     } else {
+       return false;
+     }
 
-    boost::iostreams::filtering_stream<boost::iostreams::input> fin;
-    // loading from hdfs
-    if (boost::starts_with(prefix, "hdfs://")) {
-      graphlab::hdfs& hdfs = hdfs::get_hdfs();
-      graphlab::hdfs::fstream in_file(hdfs, fname);
-      if (!in_file.good()) {
-        logstream(LOG_FATAL) << "Fail to open file " << fname << std::endl;
-        return false;
-      }
-
-      if (gzip) fin.push(boost::iostreams::gzip_decompressor());
-      fin.push(in_file);
-
-      if (!fin.good()) {
-        logstream(LOG_FATAL) << "Fail to read from stream " << fname << std::endl;
-        return false;
-      }
-
-      load_from_stream(fname, fin, line_parser);
-
-      if (gzip) fin.pop();
-      fin.pop();
-    } else { // loading from disk
-      std::ifstream in_file(fname.c_str(),
-          std::ios_base::in | std::ios_base::binary);
-
-      if (!in_file.good()) {
-        logstream(LOG_FATAL) << "Fail to open file " << fname << std::endl;
-        return false;
-      }
-
-      if (gzip) fin.push(boost::iostreams::gzip_decompressor());
-      fin.push(in_file);
-
-      if (!fin.good()) {
-        logstream(LOG_FATAL) << "Fail to read from stream " << fname << std::endl;
-        return false;
-      }
-
-      load_from_stream(fname, fin, line_parser);
-
-      if (gzip) fin.pop();
-      fin.pop();
+     // load vrecord files
+    std::vector<std::string> vrecfiles;
+    list_files_with_prefix(path, "vrecord", vrecfiles);
+    line_parser_type vrecord_parser = boost::bind(parse_vrecord, graph, _1, vertex_parser);
+    foreach(std::string file, vrecfiles) {
+      success &= parse_by_line(file, vrecord_parser); 
     }
 
-
-    return true;
+    ASSERT_EQ(graph.local_own_vertices, num_own_vertices);
+    return success;
   }
-    /**
-       \internal
-       This internal function is used to load a single line from an input stream
-     */
-    template<typename Fstream>
-    bool load_from_stream(std::string filename, Fstream& fin,
-                          line_parser_type& line_parser) {
-      size_t linecount = 0;
-      timer ti; ti.start();
-      while(fin.good() && !fin.eof()) {
-        std::string line;
-        std::getline(fin, line);
-        if(line.empty()) continue;
-        if(fin.fail()) break;
-        const bool success = line_parser(graph, line);
-        if (!success) {
-          logstream(LOG_WARNING)
-            << "Error parsing line " << linecount << " in "
-            << filename << ": " << std::endl
-            << "\t\"" << line << "\"" << std::endl;
-          return false;
-        }
-        ++linecount;
-        if (ti.current_time() > 5.0) {
-          logstream(LOG_INFO) << linecount << " Lines read" << std::endl;
-          ti.start();
-        }
-      }
-      return true;
-    } // end of load from stream
 
 
 
-  /* Parse the graph structure from json */
-  static bool parse_graph_structure_from_json (graph_type& graph, const std::string& str) {
+  /* Load the subpartition at given path. 
+   * The subpartition consists of two parts: edge data files
+   * and edge list files.
+   * Example of subpartition files:
+   * subpart0/meta:
+   *    {numEdges:2000}
+   * subpart0/elist:
+   *    {source:12, targets:{1,2,3,4,5}}
+   *    {source:13, targets:{1,2,3,4,5}}
+   *    ...
+   * subpart0/edata:
+   *    {data0, data2, ... data24}
+   *    {data25, data26, ... data50}
+   *    ...
+  */
+  bool load_subpart(const std::string& path) {
+    bool success = true;
+
+    size_t numEdges = 0;
+    // Load meta file.
+    const std::string metapath = fs_util::concat_path(path, "meta");
+
+    // Load edge data.
+    const std::string edatapath = fs_util::concat_path(path, "edata");
+    success &= parse_by_line(edatapath, boost::bind(parse_edata, edata_arr, _1, edge_parser));
+
+    if (!success)  return false;
+
+    std::vector<lvid_type> source_arr;
+    std::vector<lvid_type> target_arr;
+    std::vector<lvid_type> edata_arr;
+    source_arr.reserve(numEdges);
+    target_arr.reserve(numEdges);
+    edata_arr.reserve(numEdges);
+
+    // Load edge list.
+    const std::string edgelistpath = fs_util::concat_path(path, "elist");
+    success &= parse_by_line(edgelistpath, 
+        boost::bind(parse_edge_list, graph.vid2lvid, source_arr, target_arr, _1)); 
+
+    // Atomically modify the graph.
+    graph_lock.lock();
+      size_t oldsize = local_graph.num_edges();
+      local_graph.reserve_edge_space(oldsize + numEdges);
+      local_graph.add_edges(source_arr, target_arr, edata_arr);
+    graph_lock.unlock();
+
+    return success;
+  }
+
+
+  /* Parse the vertex record meta file. 
+   * Read in number of vertices and number of local own vertices
+   * of this partition.
+   * */
+  static bool parse_vrecord_meta (size_t& num_vertices, 
+      size_t& num_own_vertices, const std::string& str) {
+    bool success = true;
     JSONNode n = libjson::parse(str);
     JSONNode::const_iterator i = n.begin();
-    typedef typename graph_type::local_graph_type local_graph_type;
-    local_graph_type& local_graph = graph.get_local_graph();
-    while(i != n.end()) {
-      if (i->name() == "numEdges") {
-        local_graph.gstore.num_edges = i->as_int();
-      } else if (i->name() == "numVertices") {
-        local_graph.gstore.num_vertices= i->as_int();
-      } else if (i->name() == "csr") {
-        // parse rowIndex -> graph.local_graph.gstore.csr_source
-        // parse colIndex -> graph.local_graph.gstore.csr_target
-        JSONNode csr = *i;
-        JSONNode::const_iterator j = csr.begin();
-        while (j != csr.end()) {
-          if (j->name() == "rowIndex") {
-              parse_vid_array (local_graph.gstore.CSR_src, *j);
-          } else if (j->name() == "colIndex") {
-              parse_vid_array (local_graph.gstore.CSR_dst, *j);
-          } else {
-              logstream(LOG_ERROR) << "Error parsing json into graph. Unknown json node name:"
-                << "CSR:" << j->name() << std::endl;
-          }
-          ++j;
-        }
-      } else if (i->name() == "csc") {
-        // parse rowIndex -> graph.local_graph.gstore.csc_target
-        // parse colIndex -> graph.local_graph.gstore.csc_source
-        JSONNode csc = *i;
-        JSONNode::const_iterator j = csc.begin();
-
-        while (j != csc.end()) {
-          if (j->name() == "rowIndex") {
-              parse_vid_array (local_graph.gstore.CSC_dst, *j);
-          } else if (j->name() == "colIndex") {
-              parse_vid_array (local_graph.gstore.CSC_src, *j);
-          } else {
-              logstream(LOG_ERROR) << "Error parsing json into graph. Unknown json node name:"
-                << "CSC:"<<j->name() << std::endl;
-          }
-          ++j;
-        }
-      } else if (i->name() == "c2rMap") {
-        parse_vid_array (local_graph.gstore.c2r_map, *i);
+    while (i != n.end()) {
+      if (i->name() == "numVertices") {
+        num_vertices = i->as_int();
+      } else if (i->name() == "numOwnVertices") {
+        num_own_vertices = i->as_int();
       } else {
-        logstream(LOG_ERROR) << "Error parsing json into graph. Unknown json node name:" <<
-          i->name() << std::endl;
+        logstream(LOG_WARNING) 
+          << "Unknown field of vrecord meta: " 
+          << i->name();
+        success = false;
       }
-      ++i;
-    } // end while
-
-
-    ASSERT_EQ(local_graph.gstore.num_edges, local_graph.gstore.c2r_map.size());
-    ASSERT_EQ(local_graph.gstore.num_edges, local_graph.gstore.CSR_dst.size());
-    ASSERT_EQ(local_graph.gstore.num_edges, local_graph.gstore.CSC_src.size());
-
-    graph.lvid2record.reserve(local_graph.gstore.num_vertices);
-    graph.lvid2record.resize(local_graph.gstore.num_vertices);
-    local_graph.reserve(local_graph.gstore.num_vertices);
-    // local_graph.finalized = true;
-    return true;
-  }
-
-  /* Parse the vid2lvid map from json */
-  static bool parse_vid2lvid_from_json (graph_type& graph, const std::string& str) {
-    JSONNode n = libjson::parse(str);
-    JSONNode::const_iterator i = n.begin();
-    typedef typename graph_type::local_graph_type local_graph_type;
-    while(i != n.end()) {
-      if (i->name() == "vid2lvid") {
-        JSONNode::const_iterator j = i->begin();
-        typename graph_type::vid2lvid_map_type & map = graph.vid2lvid;
-        map.clear();
-        while(j != i->end()) {
-          graph.vid2lvid[boost::lexical_cast<vertex_id_type>(j->name())] = (boost::lexical_cast<lvid_type>)(j->as_int());
-          ++j;
-        }
-      } else {
-        // report error
-        return false;
-      }
-      ++i;
     }
-    return true;
-  }
-
-  /* Parse the edata list from json */
-  static bool parse_edatalist_from_json (graph_type& graph, const std::string& str,
-      edge_parser_type edge_parser) {
-    JSONNode n = libjson::parse(str);
-    JSONNode::const_iterator i = n.begin();
-    typedef typename graph_type::local_graph_type local_graph_type;
-    local_graph_type& local_graph = graph.get_local_graph();
-    while(i != n.end()) {
-       if (i->name() == "edataList") {
-        // parse  edatalist -> graph.local_graph.gstore.edata
-        JSONNode edatanode= *i;
-        JSONNode::const_iterator j = edatanode.begin();
-        std::vector<edge_data_type>& edatalist = local_graph.gstore.edge_data_list;
-        edatalist.clear();
-        edatalist.reserve(local_graph.gstore.num_edges);
-        edge_data_type e;
-        while (j != edatanode.end()) {
-          edge_parser(e, j->as_string());
-          edatalist.push_back(e);
-          ++j;
-        }
-       } else {
-         return false;
-         // report error
-       }
-      ++i;
-    }
-    return true;
+    return success;
   }
 
 
-  /* Parse the vertex record list from json */
-  static bool parse_vrecord_from_json (graph_type& graph, const std::string& str,
+  /* Parse the vertex record list from json.
+   * Each parsed vertex record creates a vid2lvid map entry, 
+   * and is inserted into graph.vrecordlist, graph.local_graph.vertices.
+   * Assumption: require graph.lvid2record is preallocated.
+   */
+  static bool parse_vrecord (graph_type& graph, const std::string& str,
       vertex_parser_type vertex_parser) {
 
     typedef typename graph_type::local_graph_type local_graph_type;
@@ -375,7 +358,7 @@ class json_parser {
         vrecord.gvid = boost::lexical_cast<vertex_id_type>(i->as_int());
       } else if (i->name() == "owner") {
         vrecord.owner = (procid_t)i->as_int();
-      } else if (i->name() == "VertexData") {
+      } else if (i->name() == "vdata") {
         if (!(i->type() == JSON_NULL))
           vertex_parser(vdata, i->as_string());
       } else {
@@ -385,71 +368,148 @@ class json_parser {
       ++i;
     }
 
-      if (graph.vid2lvid.find(vrecord.gvid) == graph.vid2lvid.end()) {
-        // Check if this a singlton node
-        // ignore for now
-        logstream(LOG_WARNING) << "Singleton node detected: gvid = " << vrecord.gvid << ". Ignored" << std::endl;
-      } else {
-        lvid_type lvid = graph.vid2lvid[vrecord.gvid];
-        graph.lvid2record[lvid] = vrecord;
-        local_graph.add_vertex(lvid, vdata);
-        if (vrecord.owner == graph.procid()) ++graph.local_own_nverts;
-      }
+    if (!graph.vid2lvid.find(vrecord.gvid) == graph.vid2lvid.end()) {
+      logstream(LOG_WARNING) << "Duplicate vertex record : gvid = " << vrecord.gvid << ". Ignored" << std::endl;
+    } else {
+      lvid_type lvid = vid2lvid.size();
+      graph.vid2lvid[vrecord.gvid] = lvid;
+      graph.lvid2record[lvid] = vrecord;
+      local_graph.add_vertex(lvid, vdata);
+      if (vrecord.owner == graph.procid()) ++graph.local_own_nverts;
+    }
 
     return true;
   }
 
-
-  /*  Helper function starts here  */
-  private:
-  /* Parse an json integer array and copy to a int vector */
-  static bool parse_vid_array (std::vector<vertex_id_type>& to, const JSONNode& n) {
-    if (n.type() != JSON_ARRAY) return false;
-    to.clear();
+  /* Parse the subpartition meta file. 
+   * Read in number of edges of the sub partition.
+   * */
+  static bool parse_subpart_meta (size_t& num_edges, const std::string& str) {
+    bool success = true;
+    JSONNode n = libjson::parse(str);
     JSONNode::const_iterator i = n.begin();
     while (i != n.end()) {
-      to.push_back(i->as_int());
+      if (i->name() == "numEdges") {
+        num_edges = i->as_int();
+      } else {
+        logstream(LOG_WARNING) 
+          << "Unknown field of edge meta: " 
+          << i->name();
+        success = false;
+      }
+    }
+    return success;
+  }
+
+  /* Parse the graph structure, in this case the edge adjacency list. 
+   * The vertices of each parsed edge will be translated into local vid, 
+   * and inserted into source_arr, and target_arr. 
+   * Assumption: require vid2lvid map. 
+   * */
+  static bool parse_edge_list(const vid2lvid_map_type& map, 
+      std::vector<lvid_type>& source_arr, 
+      std::vector<lvid_type>& target_arr,
+      const std::string& str) {
+    JSONNode n = libjson::parse(str);
+    JSONNode::const_iterator i = n.begin();
+
+    lvid_type source(-1);
+    lvid_type target(-1);
+
+    while(i != n.end()) {
+      if (i->name() == "source") {
+        if (map.find(i->as_int()) == map.end()) {
+          logstream(LOG_ERROR) 
+            << "Unknown vid from adjcency list: gvid = " 
+            << i->as_int() << std::endl;
+          return false;
+        } else {
+          source = map[i->as_int()];
+        }
+      } else if (i->name() == "targets") {
+        if (i->type() != JSON_ARRAY) {
+          logstream(LOG_ERROR)
+            << "Type of targets is not JSON_ARRAY" << std::endl;
+          return false;
+        } else {
+          JSONNode::const_iterator iter = i->begin();
+          while (iter != i->end()) {
+            if (map.find(iter->as_int()) == map.end()) {
+              logstream(LOG_ERROR) 
+                << "Unknown vid from adjcency list: gvid = " 
+                << iter->as_int() << std::endl;
+              return false;
+            } else {
+              source_arr.push_back(source);
+              target_arr.push_back(map[iter->as_int()]);
+            }
+          }
+        }
+      } 
+      ++i;
+    } // end while
+   return true;
+  }
+
+  /* Parse the edata list from json */
+  static bool parse_edata(std::vector<EdgeData>& edata_arr, const std::string& str, edge_parser_type edge_parser) {
+    JSONNode n = libjson::parse(str);
+    JSONNode::const_iterator i = n.begin();
+    while(i != n.end()) {
+       if (i->type() == JSON_ARRAY) {
+        // parse  edatalist -> graph.local_graph.gstore.edata
+        JSONNode::const_iterator j = i->begin();
+        edge_data_type e;
+        while (j != i->end()) {
+          edge_parser(e, j->as_string());
+          edata_arr.push_back(e);
+          ++j;
+        }
+       } else {
+         logstream(LOG_ERROR) 
+            << "Error in parsing edata. Unknown field name : "
+            << i->name() << std::endl;
+         return false;
+       }
       ++i;
     }
     return true;
   }
 
 
-  std::string zeropadding(const std::string& s, int width) {
-      ASSERT_LE(s.length(), width);
-      std::ostringstream ss;
-      ss << std::setw(width) << std::setfill('0') << s;
-      return ss.str();
-  } 
+  /*  Helper function starts here  */
+  private:
+  /**
+    \internal
+    This internal function is used to load a single line from an input stream
+    */
+  template<typename Fstream>
+    bool load_from_stream(std::string filename, Fstream& fin,
+        line_parser_type& line_parser) {
+      size_t linecount = 0;
+      timer ti; ti.start();
+      while(fin.good() && !fin.eof()) {
+        std::string line;
+        std::getline(fin, line);
+        if(line.empty()) continue;
+        if(fin.fail()) break;
+        const bool success = line_parser(line);
+        if (!success) {
+          logstream(LOG_WARNING)
+            << "Error parsing line " << linecount << " in "
+            << filename << ": " << std::endl
+            << "\t\"" << line << "\"" << std::endl;
+          return false;
+        }
+        ++linecount;
+        if (ti.current_time() > 5.0) {
+          logstream(LOG_INFO) << linecount << " Lines read" << std::endl;
+          ti.start();
+        }
+      }
+      return true;
+    } // end of load from stream
 
-
-  const std::string graphfilename() {
-    procid_t pid = graph.procid();
-    std::string suffix =  gzip ? ".gz" : "";
-    return "graph/graph"+tostr(pid)+"-r-"+zeropadding(tostr(pid), 5)+suffix;
-    // return "graph/graph"+tostr(pid)+"-r-00000"+suffix;
-  }
-
-  const std::string vid2lvidfilename() {
-    procid_t pid = graph.procid();
-    std::string suffix =  gzip ? ".gz" : "";
-    return "graph/vid2lvid"+tostr(pid)+"-r-"+zeropadding(tostr(pid), 5)+suffix;
-    // return "graph/vid2lvid"+tostr(pid)+"-r-00000"+suffix;
-  }
-
-  const std::string edatafilename() {
-    procid_t pid = graph.procid();
-    std::string suffix =  gzip ? ".gz" : "";
-    return "graph/edata"+tostr(pid)+"-r-"+zeropadding(tostr(pid),5)+suffix;
-    // return "graph/edata"+tostr(pid)+"-r-00000"+suffix;
-  }
-
-  const std::string vrecordfilename() {
-    procid_t pid = graph.procid();
-    std::string suffix =  gzip ? ".gz" : "";
-    return "vrecord/vdata"+tostr(pid)+"-r-"+zeropadding(tostr(pid),5)+suffix;
-    // return "vrecord/vdata"+tostr(pid)+"-r-00000"+ suffix;
-  }
 
   private:
     graph_type& graph;
