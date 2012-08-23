@@ -1,0 +1,50 @@
+A synthetic partitioned graph. The graph has 6 vertices, and 13 edges, partitioned into 3 parts, and each partition
+has two subpartition.
+ 
+src dst partition 
+0   1     0 - 0   
+0   2     1 - 1
+0   4     1 - 1 
+1   3     2 - 1
+1   5     2 - 0
+1   2     0 - 1
+2   4     0 - 0
+2   5     1 - 1
+3   1     2 - 1
+3   0     1 - 0
+4   0     2 - 1
+5   3     0 - 1
+5   1     2 - 0
+
+Partition00
+0 1
+2 4
+
+Partition01
+1 2
+5 3
+
+Partition10
+3 0
+
+Partition11
+0 2
+0 4
+2 5
+
+Partition20
+1 5
+5 1
+
+Partition21
+1 3
+4 1
+4 0
+
+Vrecord:
+{gvid:"0",inEdges:2, outEdges:3, mirrors:{0,1,2}, owner:2,vdata:""}
+{gvid:"1",inEdges:3, outEdges:3, mirrors:{0,2}, owner:0,vdata:""}
+{gvid:"2",inEdges:2, outEdges:2, mirrors:{0,1}, owner:1,vdata:""}
+{gvid:"3",inEdges:2, outEdges:2, mirrors:{0,1,2}, owner:1, vdata:""}
+{gvid:"4",inEdges:2, outEdges:1, mirrors:{0,1,2}, owner:2, vdata:""}
+{gvid:"5",inEdges:2, outEdges:2, mirrors:{0,1,2}, owner:0, vdata:""}

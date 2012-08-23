@@ -1,0 +1,6 @@
+{"gvid":"0","inEdges":2, "outEdges":3, "mirrors":[0,1,2], "owner":2,"vdata":""}
+{"gvid":"1","inEdges":3, "outEdges":3, "mirrors":[0,2], "owner":0,"vdata":""}
+{"gvid":"2","inEdges":2, "outEdges":2, "mirrors":[0,1], "owner":1,"vdata":""}
+{"gvid":"3","inEdges":2, "outEdges":2, "mirrors":[0,1,2], "owner":1, "vdata":""}
+{"gvid":"4","inEdges":2, "outEdges":1, "mirrors":[0,1,2], "owner":2, "vdata":""}
+{"gvid":"5","inEdges":2, "outEdges":2, "mirrors":[0,1,2], "owner":0, "vdata":""}
