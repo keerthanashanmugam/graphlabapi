@@ -675,7 +675,6 @@ int main(int argc, char** argv) {
   engine.map_reduce_vertices<graphlab::empty>(biassgd_vertex_program::signal_left);
  
 
-  // Run the PageRank ---------------------------------------------------------
   dc.cout() << "Running Bias-SGD" << std::endl;
   dc.cout() << "(C) Code by Danny Bickson, CMU " << std::endl;
   dc.cout() << "Please send bug reports to danny.bickson@gmail.com" << std::endl;

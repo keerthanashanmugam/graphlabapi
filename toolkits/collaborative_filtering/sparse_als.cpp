@@ -31,6 +31,7 @@
  */
 
 #include <Eigen/Dense>
+#define EIGEN_DONT_PARALLELIZE //eigen parallel for loop interfers with ours.
 
 #include <boost/config/warning_disable.hpp>
 #include <boost/spirit/include/qi.hpp>
@@ -43,7 +44,7 @@
 
 // This file defines the serialization code for the eigen types.
 #include "eigen_serialization.hpp"
-
+#include "eigen_wrapper.hpp"
 #include <graphlab.hpp>
 #include <graphlab/util/stl_util.hpp>
 
@@ -57,13 +58,15 @@ const int SAFE_NEG_OFFSET = 2; //add 2 to negative node id
  * \brief We use the eigen library's vector type to represent
  * mathematical vectors.
  */
-typedef Eigen::VectorXd vec_type;
+typedef Eigen::VectorXd vec;
+typedef Eigen::VectorXi ivec;
 
 /**
  * \brief We use the eigen library's matrix type to represent
  * matrices.
  */
-typedef Eigen::MatrixXd mat_type;
+typedef Eigen::MatrixXd mat;
+#include "cosamp.hpp"
 
 
 /**
@@ -71,6 +74,15 @@ typedef Eigen::MatrixXd mat_type;
  * than the source id.
  */
 bool REMAP_TARGET = true;
+
+//algorithm run modes
+enum {
+  SPARSE_USR_FACTOR = 1, SPARSE_ITM_FACTOR = 2, SPARSE_BOTH_FACTORS = 3
+};
+
+int algorithm = SPARSE_USR_FACTOR;
+double user_sparsity = 0.8;
+double movie_sparsity = 0.8;
 
 
 
@@ -97,7 +109,7 @@ struct vertex_data {
   /** \brief The most recent L1 change in the factor value */
   float residual; //! how much the latent value has changed
   /** \brief The latent factor for this vertex */
-  vec_type factor;
+  vec factor;
   /** 
    * \brief Simple default constructor which randomizes the vertex
    *  data 
@@ -190,12 +202,12 @@ public:
    * \brief Stores the current sum of nbr.factor.transpose() *
    * nbr.factor
    */
-  mat_type XtX;
+  mat XtX;
 
   /**
    * \brief Stores the current sum of nbr.factor * edge.obs
    */
-  vec_type Xy;
+  vec Xy;
 
   /** \brief basic default constructor */
   gather_type() { }
@@ -204,9 +216,9 @@ public:
    * \brief This constructor computes XtX and Xy and stores the result
    * in XtX and Xy
    */
-  gather_type(const vec_type& X, const double y) :
+  gather_type(const vec& X, const double y) :
     XtX(X.size(), X.size()), Xy(X.size()) {
-    XtX.triangularView<Eigen::Upper>() = X * X.transpose();
+    XtX = X * X.transpose();
     Xy = X * y;
   } // end of constructor for gather type
 
@@ -305,13 +317,24 @@ public:
     // Determine the number of neighbors.  Each vertex has only in or
     // out edges depending on which side of the graph it is located
     if(sum.Xy.size() == 0) { vdata.residual = 0; ++vdata.nupdates; return; }
-    mat_type XtX = sum.XtX;
-    vec_type Xy = sum.Xy;
+    mat XtX = sum.XtX;
+    vec Xy = sum.Xy;
     // Add regularization
     for(int i = 0; i < XtX.rows(); ++i) XtX(i,i) += LAMBDA; // /nneighbors;
     // Solve the least squares problem using eigen ----------------------------
-    const vec_type old_factor = vdata.factor;
-    vdata.factor = XtX.selfadjointView<Eigen::Upper>().ldlt().solve(Xy);
+    const vec old_factor = vdata.factor;
+    
+    bool isuser = vertex.id() >= 0;
+    if (algorithm == SPARSE_BOTH_FACTORS || (algorithm == SPARSE_USR_FACTOR && isuser) || 
+        (algorithm == SPARSE_ITM_FACTOR && !isuser)){ 
+      double sparsity_level = 1.0;
+      if (isuser)
+        sparsity_level -= user_sparsity;
+      else sparsity_level -= movie_sparsity;
+      vdata.factor = CoSaMP(XtX, Xy, ceil(sparsity_level*(double)vertex_data::NLATENT), 10, 1e-4, vertex_data::NLATENT);
+    }
+    else vdata.factor = XtX.selfadjointView<Eigen::Upper>().ldlt().solve(Xy);
+
     // Compute the residual change in the factor factor -----------------------
     vdata.residual = (vdata.factor - old_factor).cwiseAbs().sum() / XtX.rows();
     ++vdata.nupdates;
@@ -562,7 +585,7 @@ int main(int argc, char** argv) {
   graphlab::command_line_options clopts(description);
   std::string input_dir, output_dir;
   std::string predictions;
-  size_t interval = 10;
+  size_t interval = 1;
   std::string exec_type = "synchronous";
   clopts.attach_option("matrix", input_dir,
                        "The directory containing the matrix file");
@@ -581,6 +604,10 @@ int main(int argc, char** argv) {
                        "The time in seconds between error reports");
   clopts.attach_option("predictions", predictions,
                        "The prefix (folder and filename) to save predictions.");
+  clopts.attach_option("user_sparsity", user_sparsity, "sparsity of user factors");
+  clopts.attach_option("movie_sparsity", movie_sparsity, "sparsity of item factors");
+  clopts.attach_option("algorithm", algorithm, "run mode. 1 = SPARSE_USR_FACTOR, 2 = SPARSE_ITM_FACTOR, 3 = SPARSE_BOTH_FACTORS");
+
   clopts.attach_option("engine", exec_type, 
                        "The engine type synchronous or asynchronous");
   // clopts.attach_option("remap", REMAP_TARGET,
@@ -592,6 +619,14 @@ int main(int argc, char** argv) {
     std::cout << "Error in parsing command line arguments." << std::endl;
     return EXIT_FAILURE;
   }
+  if (user_sparsity < 0.5 || user_sparsity >= 1)
+    logstream(LOG_FATAL)<<"Sparsity level should be [0.5,1). Please run again using --user_sparsity=XX in this range" << std::endl;
+
+  if (movie_sparsity < 0.5 || movie_sparsity >= 1)
+    logstream(LOG_FATAL)<<"Sparsity level should be [0.5,1). Please run again using --movie_sparsity=XX in this range" << std::endl;
+
+if (algorithm != SPARSE_USR_FACTOR && algorithm != SPARSE_BOTH_FACTORS && algorithm != SPARSE_ITM_FACTOR)
+    logstream(LOG_FATAL)<<"Algorithm should be 1 for SPARSE_USR_FACTOR, 2 for SPARSE_ITM_FACTOR and 3 for SPARSE_BOTH_FACTORS" << std::endl;
 
   ///! Initialize control plain using mpi
   graphlab::mpi_tools::init(argc, argv);
@@ -643,8 +678,11 @@ int main(int argc, char** argv) {
   engine.map_reduce_vertices<graphlab::empty>(als_vertex_program::signal_left);
  
 
-  // Run the PageRank ---------------------------------------------------------
-  dc.cout() << "Running ALS" << std::endl;
+  dc.cout() << "Running Sparse-ALS" << std::endl;
+  dc.cout() << "(C) Code by Danny Bickson, CMU " << std::endl;
+  dc.cout() << "Please send bug reports to danny.bickson@gmail.com" << std::endl;
+  dc.cout() << "Time   Training    Validation" <<std::endl;
+  dc.cout() << "       RMSE        RMSE " <<std::endl;
   timer.start();
   engine.start();  
 
