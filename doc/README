@@ -1,0 +1,3 @@
+To generate docs, run "doxygen" in the graphlabapi/ directory
+Doxygen >= 1.8 recommended
+
