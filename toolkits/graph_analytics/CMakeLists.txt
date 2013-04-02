@@ -1,0 +1,19 @@
+project(GraphProcessing)
+
+add_graphlab_executable(simple_undirected_triangle_count simple_undirected_triangle_count)
+add_graphlab_executable(undirected_triangle_count undirected_triangle_count.cpp)
+add_graphlab_executable(directed_triangle_count directed_triangle_count.cpp)
+add_graphlab_executable(pagerank pagerank.cpp)
+add_graphlab_executable(kcore kcore.cpp)
+add_graphlab_executable(format_convert format_convert.cpp)
+add_graphlab_executable(sssp sssp.cpp)
+add_graphlab_executable(simple_coloring simple_coloring.cpp)
+add_graphlab_executable(connected_component connected_component.cpp)
+add_graphlab_executable(approximate_diameter approximate_diameter.cpp)
+add_graphlab_executable(eigen_vector_normalization eigen_vector_normalization.cpp)
+add_graphlab_executable(graph_laplacian graph_laplacian.cpp)
+add_graphlab_executable(partitioning partitioning.cpp)
+
+
+add_graphlab_executable(gl3pagerank gl3pagerank.cpp)
+add_graphlab_executable(gl3pagerank2 gl3pagerank2.cpp)
