@@ -239,11 +239,13 @@
   typedef graphlab::distributed_graph_type<web_page, graphlab::empty> graph_type;
 
   int main(int argc, char** argv) {
+    //initialize GraphLab communication layer
     graphlab::mpi_tools::init(argc, argv);
     graphlab::distributed_control dc;
  
     dc.cout() << "Hello World!\n";
 
+    //shutdown GraphLab communication layer
     graphlab::mpi_tools::finalize();
   }
   \endcode
@@ -591,8 +593,8 @@ public:
   engine is selected, the vertices will run asynchronously, but a distributed
   locking procedure is used internally to ensure data consistency.
 
-  Each vertex in the graph will run exactly once. We could of course embed
-  the signal+start operations in a loop to run multiple rounds, but that would 
+  <strong>Each vertex in the graph will run exactly once</strong>. We could of course
+  signal nodes and start the engine mutiple times to run multiple rounds, but that would 
   be inefficient. In the \ref using_scheduling "next section" we will learn how
   to signal vertices inside a vertex program.
 
