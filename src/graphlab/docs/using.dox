@@ -51,6 +51,7 @@
   - \subpage using_graphlab_distributed_graph_vertex_program 
   - \subpage using_scheduling 
   - \subpage using_saving_answers 
+  - \subpage using_command_line_options
   - \subpage using_conclusion
 
   \page using_graphlab_create_project 1: Creating a GraphLab project
@@ -824,7 +825,51 @@ the ref graphlab::distributed_graph::save_format() "graph.save_format()"function
 
 The \ref using_conclusion "next section" is a brief conclusion.
 
-\page using_conclusion 8: Conclusion
+\page using_command_line_options 8: Adding your own command line options
+The GraphLab command line options class helps parse basic command line options for the GraphLab framework as well as user applications.
+
+Early in the development of GraphLab we realized that a lot of time was spent writing code to parse the many GraphLab options as well as each of the applications options. In many cases we were using the boost::program_options library which while very powerful can also be fairly complicated.
+
+As a consequence, we developed a simple command line options object that parses the standard argv options capturing GraphLab specific options and also processing users options. GraphLab command line tools to enable user applications to benefit from sophisticated and still easy to use command line parsing.
+
+The command_line_options data-structure is built on top of the boost::program_options library. We have tried to retain much of the functionality of the boost::program_options library while hiding some of the less "friendly" template meta-programming "features".
+
+Here is an example of how the library is used:
+\code
+     int main(int argc, char** argv) {
+    
+       std::string filename;
+       size_t dimensions = 20;
+       double bound = 1E-5;
+       bool use_x = false;
+       std::vector<size_t> nsamples(1,10000);
+     
+       // Parse command line options
+       graphlab::command_line_options clopts("Welcome to a the HelloWorld");
+       clopts.attach_option("file", filename, "The input filename (required)");
+       clopts.add_positional("file");
+       clopts.attach_option("dim", dimensions,
+                            "the dimension of the grid");
+       clopts.attach_option("bound", bound,
+                            "The termination bound");
+       clopts.attach_option("usex", use_x,
+                            "Use algorithm x");
+       clopts.attach_option("nsamples", nsamples,
+                            "A vector of the number of samples"); 
+    
+       if(!clopts.parse(argc, argv)) return EXIT_FAILURE;
+     
+       if(!clopts.is_set("file")) {
+         std::cout << "Input file not provided" << std::endl;
+         clopts.print_description();
+         return EXIT_FAILURE;
+       }
+     }
+\endcode 
+
+Full command line option documentation is <a href="http://docs.graphlab.org/classgraphlab_1_1command__line__options.html">here</a>.
+
+\page using_conclusion 9: Conclusion
 
 This completes the core of the GraphLab tutorial. We have went through an overview
 of 
