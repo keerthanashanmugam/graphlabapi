@@ -16,6 +16,7 @@ class fiber_group {
     boost::context::fcontext_t* context;
     void* stack;
     size_t id;
+    int affinity;
     void* fls; // fiber local storage
     fiber* next;
     intptr_t initial_trampoline_args;
@@ -48,23 +49,27 @@ class fiber_group {
 
   bool stop_workers;
 
- // The scheduler is a single queue
-  mutex active_lock;
-  conditional active_cond;
-  size_t workers_waiting;
-  // used as a sentinel for the actual queues
-  // first element is always head,
-  // tail points to the last element
-  fiber active_head;
-  fiber* active_tail;
-  size_t nactive;
+  // The scheduler is a simple queue. One for each worker
+  struct thread_schedule {
+    mutex active_lock;
+    conditional active_cond;
+    // used as a sentinel for the actual queues
+    // first element is always head,
+    // tail points to the last element
+    fiber active_head;
+    fiber* active_tail;
+    size_t nactive;
+    bool waiting;
+  };
+  std::vector<thread_schedule> schedule;
 
+  atomic<size_t> nactive;
   thread_group workers;
 
 
   // locks must be acquired outside the call
-  void active_queue_insert(fiber* value);
-  fiber* active_queue_remove();
+  void active_queue_insert(size_t workerid, fiber* value);
+  fiber* active_queue_remove(size_t workerid);
 
   // a thread local storage for the worker to point to a fiber
   static bool tls_created;
@@ -73,7 +78,7 @@ class fiber_group {
     fiber* prev_fiber; // the fiber we context switch from
     fiber* cur_fiber; // the fiber we are context switching to
     fiber* garbage;
-    size_t worker_id;
+    size_t workerid;
     boost::context::fcontext_t base_context;
   };
   static pthread_key_t tlskey; // points to the tls structure above
@@ -86,9 +91,11 @@ class fiber_group {
 
   void worker_init(size_t workerid);
 
-  void reschedule_fiber(fiber* pfib);
+  void reschedule_fiber(size_t workerid, fiber* pfib);
   void yield_to(fiber* next_fib);
   static void trampoline(intptr_t _args);
+
+  size_t load_balanced_worker_choice(size_t seed);
 
   void (*flsdeleter)(void*);
  public:
@@ -101,7 +108,7 @@ class fiber_group {
    * Returns a fiber ID. IDs are not sequential.
    * \note The ID is really a pointer to a fiber_group::fiber object.
    */
-  size_t launch(boost::function<void (void)> fn);
+  size_t launch(boost::function<void (void)> fn, int worker_affinity = -1);
 
   inline size_t num_active() const {
     return nactive;
