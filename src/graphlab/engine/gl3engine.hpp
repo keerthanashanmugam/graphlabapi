@@ -317,6 +317,8 @@ class gl3engine {
   size_t num_vthreads;
   // number of worker threads
   size_t ncpus;
+
+  bool all_fast_path; // if set, the RPC handlers will evaluate the subtasks directly
   // A reference to the graph
   graph_type& graph;
   // the subtask types
@@ -410,6 +412,7 @@ class gl3engine {
       rmi(dc, this), graph(graph), execution_group(opts.get_ncpus(), 64 * 1024) {
     rmi.barrier();
     num_vthreads = 10000;
+    all_fast_path = false;
     ncpus = opts.get_ncpus();
     worker_mutex.resize(ncpus);
 
@@ -423,7 +426,14 @@ class gl3engine {
         if (rmi.procid() == 0)
           logstream(LOG_EMPH) << "Engine Option: num_vthreads = "
                               << num_vthreads << std::endl;
-      } else {
+      }
+      else if (opt == "all_fast_path") {
+        opts.get_engine_args().get_option("all_fast_path", all_fast_path);
+        if (rmi.procid() == 0)
+          logstream(LOG_EMPH) << "Engine Option: all_fast_path = "
+                              << all_fast_path << std::endl;
+      }
+      else {
         logstream(LOG_FATAL) << "Unexpected Engine Option: " << opt << std::endl;
       }
     }
@@ -525,7 +535,7 @@ class gl3engine {
   void internal_schedule(const lvid_type lvid,
                          const message_type& message) {
     scheduler_ptr->schedule(lvid, message);
-    if (active_vthread_count < ncpus) {
+    if (execution_group.num_threads() < num_vthreads) {
       launch_a_vthread();
     }
   }
@@ -1013,9 +1023,6 @@ class gl3engine {
   void wait_on_combiner(future_combiner& combiner) {
     combiner.lock.lock();
     while (combiner.count_down != 0) {
-      if (execution_group.num_active() == 0 && execution_group.num_threads() < num_vthreads) {
-        launch_a_vthread();
-      }
       fiber_group::deschedule_self(&combiner.lock.m_mut);
       combiner.lock.lock();
     }
@@ -1262,7 +1269,8 @@ class gl3engine {
       }
     }
     // do we fast path it?
-    if (task_types[task_id]->fast_path(param)) {
+    if (all_fast_path || task_types[task_id]->fast_path(param)) {
+    //if (1) {
       // fast path
       any ret = task_types[task_id]->exec(graph, vid, param, this);
       // return to origin
@@ -1303,6 +1311,7 @@ class gl3engine {
       }
     }
   }
+
 
   /**
    * Reads a subtask from a queue and runs it.
@@ -1520,15 +1529,14 @@ class gl3engine {
    */
   void vthread_start(size_t id) {
     GL3TLS::SET_IN_VTHREAD_TASK(true);
-    size_t ctr = timer::approx_time_millis();
     while(1) {
       rmi.dc().handle_incoming_calls(fiber_group::get_worker_id(), ncpus);
+      exec_subtasks(fiber_group::get_worker_id());
+      GL3TLS::SET_IN_VTHREAD_TASK(true);
       bool haswork = exec_scheduler_task(0);
+
       // we should yield every so often
-      if (timer::approx_time_millis() >= ctr + 100) {
-        fiber_group::yield();
-        ctr = timer::approx_time_millis();
-      }
+      fiber_group::yield();
       if (!haswork) {
         active_vthread_count.dec();
         // double check
