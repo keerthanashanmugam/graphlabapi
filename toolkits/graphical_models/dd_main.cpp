@@ -122,7 +122,7 @@ int main(int argc, char** argv)
 
     // The main command. Run graphlab
     engine.start();  
-    // engine.aggregate_now("pd_obj");
+    engine.aggregate_now("pd_obj");
     
     const double runtime = timer.current_time();    
     dc.cout() 
@@ -139,10 +139,13 @@ int main(int argc, char** argv)
     ofstream file;
     file.open(filename);
     int i = 0;
-    while(i< history[0].size())
-    { file<<history[0][i]<<" "<<history[1][i]<<" "<<history[2][i]<<endl;
+    while(i< global_vars.history[0].size())
+    { file<<global_vars.history[0][i]<<" "<<global_vars.history[1][i]<<" "
+          <<global_vars.history[2][i]<<" "<<global_vars.history[3][i]<<endl;
       i++;}
      file.close();
+  
+   
     graphlab::mpi_tools::finalize();
     return EXIT_SUCCESS;
     
