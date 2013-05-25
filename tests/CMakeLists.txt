@@ -25,7 +25,9 @@ ADD_CXXTEST(test_lock_free_pool.cxx)
 ADD_CXXTEST(lock_free_pushback.cxx)
 ADD_CXXTEST(union_find_test.cxx)
 
+ADD_CXXTEST(csr_storage_test.cxx)
 ADD_CXXTEST(local_graph_test.cxx)
+ADD_CXXTEST(dynamic_local_graph_test.cxx)
 ADD_CXXTEST(empty_test.cxx)
 ADD_CXXTEST(scheduler_test.cxx)
 
@@ -61,3 +63,9 @@ add_test(test_vertex_set test_vertex_set)
 add_graphlab_executable(sort_test sort_test.cpp)
 
 add_graphlab_executable(hopscotch_test hopscotch_test.cpp)
+
+add_executable(dcsc_test dcsc_test.cpp)
+
+add_graphlab_executable(fiber_test fiber_test.cpp)
+add_graphlab_executable(fibo_fiber_test fibo_fiber_test.cpp)
+add_graphlab_executable(gl3_logistic_sgd_test gl3_logistic_sgd_test.cpp)

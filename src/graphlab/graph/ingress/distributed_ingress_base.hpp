@@ -23,16 +23,12 @@
 #ifndef GRAPHLAB_DISTRIBUTED_INGRESS_BASE_HPP
 #define GRAPHLAB_DISTRIBUTED_INGRESS_BASE_HPP
 
-#include <boost/functional/hash.hpp>
-
-#include <graphlab/util/memory_info.hpp>
-#include <graphlab/rpc/buffered_exchange.hpp>
-#include <graphlab/graph/graph_basic_types.hpp>
-#include <graphlab/graph/ingress/idistributed_ingress.hpp>
-#include <graphlab/graph/ingress/ingress_edge_decision.hpp>
 #include <graphlab/graph/distributed_graph.hpp>
+#include <graphlab/graph/graph_basic_types.hpp>
+#include <graphlab/graph/ingress/ingress_edge_decision.hpp>
+#include <graphlab/util/memory_info.hpp>
 #include <graphlab/util/cuckoo_map_pow2.hpp>
-
+#include <graphlab/rpc/buffered_exchange.hpp>
 #include <graphlab/macros_def.hpp>
 namespace graphlab {
 
@@ -43,8 +39,7 @@ namespace graphlab {
   class distributed_graph;
 
   template<typename VertexData, typename EdgeData>
-  class distributed_ingress_base : 
-    public idistributed_ingress<VertexData, EdgeData> {
+  class distributed_ingress_base {
   public:
     typedef distributed_graph<VertexData, EdgeData> graph_type;
     /// The type of the vertex data stored in the graph 
@@ -55,7 +50,9 @@ namespace graphlab {
     typedef typename graph_type::vertex_record vertex_record;
     typedef typename graph_type::mirror_type mirror_type;
 
-
+    boost::function<void(vertex_data_type&,
+                         const vertex_data_type&)> vertex_combine_strategy;
+    
     /// The rpc interface for this object
     dc_dist_object<distributed_ingress_base> rpc;
     /// The underlying distributed graph object that is being loaded
@@ -102,8 +99,10 @@ namespace graphlab {
       vertex_data_type vdata;
       vertex_id_type num_in_edges, num_out_edges;
       procid_t owner;
+      bool data_is_set;
       vertex_negotiator_record() : 
-        vdata(vertex_data_type()), num_in_edges(0), num_out_edges(0), owner(-1) { }
+        vdata(vertex_data_type()), num_in_edges(0), num_out_edges(0), 
+        owner(-1), data_is_set(false) { }
       void load(iarchive& arc) { 
         arc >> num_in_edges >> num_out_edges >> owner >> mirrors >> vdata;
       }
@@ -122,7 +121,7 @@ namespace graphlab {
       rpc.barrier();
     } // end of constructor
 
-    ~distributed_ingress_base() { }
+    virtual ~distributed_ingress_base() { }
 
     /** \brief Add an edge to the ingress object. */
     virtual void add_edge(vertex_id_type source, vertex_id_type target,
@@ -136,12 +135,24 @@ namespace graphlab {
 
     /** \brief Add an vertex to the ingress object. */
     virtual void add_vertex(vertex_id_type vid, const VertexData& vdata)  { 
-      const procid_t owning_proc = vertex_to_proc(vid);
+      const procid_t owning_proc = graph_hash::hash_vertex(vid) % rpc.numprocs();
       const vertex_buffer_record record(vid, vdata);
       vertex_exchange.send(owning_proc, record);
     } // end of add vertex
 
-    
+
+
+    /**
+     * Defines the strategy to use when duplicate vertices are inserted.
+     * The default behavior is that an arbitrary vertex data is picked.
+     * This allows you to define a combining strategy.
+     */
+    void set_duplicate_vertex_strategy(boost::function<void(vertex_data_type&,
+                                                        const vertex_data_type&)>
+                                       combine_strategy) {
+      vertex_combine_strategy = combine_strategy;
+    }
+
     /** \brief Finalize completes the local graph data structure 
      * and the vertex record information. 
      *
@@ -218,8 +229,7 @@ namespace graphlab {
         memory_info::log_usage("Finished populating local graph.");
       
       ASSERT_EQ(graph.vid2lvid.size(), graph.local_graph.num_vertices());
-      logstream(LOG_INFO) << "Vid2lvid size: " << graph.vid2lvid.size() << "\t" << "Max lvid : " << graph.local_graph.maxlvid() << std::endl;
-      ASSERT_EQ(graph.vid2lvid.size(), graph.local_graph.maxlvid() + 1);
+      logstream(LOG_INFO) << "Vid2lvid size: " << graph.vid2lvid.size() << "\t" << "Max lvid in edge buffer: " << graph.local_graph.maxlvid() << std::endl;
       
       // Finalize local graph
       logstream(LOG_INFO) << "Graph Finalize: finalizing local graph." 
@@ -242,7 +252,12 @@ namespace graphlab {
         while(vertex_exchange.recv(sending_proc, vertex_buffer)) {
           foreach(const vertex_buffer_record& rec, vertex_buffer) {
             vertex_negotiator_record& negotiator_rec = vrec_map[rec.vid];
-            negotiator_rec.vdata = rec.vdata;
+            if (vertex_combine_strategy &&  negotiator_rec.data_is_set) {
+              vertex_combine_strategy(negotiator_rec.vdata, rec.vdata);
+            } else {
+              negotiator_rec.vdata = rec.vdata;
+              negotiator_rec.data_is_set = true;
+            }
           }
         }
         vertex_exchange.clear();
@@ -277,7 +292,7 @@ namespace graphlab {
             // Send a vertex
             const vertex_id_type vid = pair.first;
             const vertex_id_type lvid = pair.second;
-            const procid_t negotiator = vertex_to_proc(vid);
+            const procid_t negotiator = graph_hash::hash_vertex(vid) % rpc.numprocs();
             const vertex_info vinfo(vid, graph.local_graph.num_in_edges(lvid),
                                     graph.local_graph.num_out_edges(lvid));
             vinfo_exchange.send(negotiator, vinfo);
@@ -303,39 +318,19 @@ namespace graphlab {
         logstream(LOG_INFO) 
           << "Graph Finalize: Constructing and sending vertex assignments" 
           << std::endl;
+
         std::vector<size_t> counts(rpc.numprocs()); 
         size_t num_singletons = 0;
-        // Compute the master assignments
+        // For simplicity simply assign this machine as the master
         foreach(vrec_pair_type& pair, vrec_map) {
-          vertex_negotiator_record& rec = pair.second;          
-          // Determine the master
-          procid_t master(-1);
-          if(rec.mirrors.popcount() == 0) {
-            // // random assign a singleton vertex to a proc
-            // const vertex_id_type vid = pair.first;
-            // master = vid % rpc.numprocs();        
-            // For simplicity simply assign it to this machine
-            master = rpc.procid(); ++num_singletons;
-          } else {
-            // Find the best (least loaded) processor to assign the
-            // vertex.
-            size_t first_mirror = 0; 
-            const bool has_mirror = 
-              rec.mirrors.first_bit(first_mirror);
-            ASSERT_TRUE(has_mirror);
-            std::pair<size_t, size_t> 
-              best_asg(counts[first_mirror], first_mirror);
-            foreach(size_t proc, rec.mirrors) {
-              best_asg = std::min(best_asg, 
-                                  std::make_pair(counts[proc], proc));
-            }
-            master =  best_asg.second;
-          }
-          // update the counts and set the master assignment
-          counts[master]++;
-          rec.owner = master;
-          rec.mirrors.clear_bit(master); // Master is not a mirror         
-        } // end of loop over all vertex negotiation records
+          vertex_negotiator_record& rec = pair.second;
+          procid_t master = rpc.procid();
+          rec.owner = master; 
+          rec.mirrors.clear_bit(master);
+          // singleton that does not have in/out edges on this machine 
+          if (graph.vid2lvid.find(pair.first) == graph.vid2lvid.end())
+            ++num_singletons;
+        }
 
         if(rpc.procid() == 0) 
           memory_info::log_usage("Finished computing masters");
@@ -428,9 +423,11 @@ namespace graphlab {
                 ASSERT_LT(lvid, graph.lvid2record.size());
                 vertex_record& local_record = graph.lvid2record[lvid];
                 local_record.owner = negotiator_rec.owner;
+#ifndef USE_DYNAMIC_LOCAL_GRAPH
                 ASSERT_EQ(local_record.num_in_edges, 0); 
-                local_record.num_in_edges = negotiator_rec.num_in_edges;
                 ASSERT_EQ(local_record.num_out_edges, 0);
+#endif
+                local_record.num_in_edges = negotiator_rec.num_in_edges;
                 local_record.num_out_edges = negotiator_rec.num_out_edges;
                 local_record._mirrors = negotiator_rec.mirrors;
               }
@@ -498,21 +495,6 @@ namespace graphlab {
                             << std::endl;
       }
     }
-
-
-
-
-
-
-
-
-  protected:
-    // HELPER ROUTINES
-    // =======================================================>
-    /** \brief Returns the random hashed pid of a vertex. */
-    procid_t vertex_to_proc(const vertex_id_type vid) const { 
-      return vid % rpc.numprocs();
-    }        
   }; // end of distributed_ingress_base
 
 }; // end of namespace graphlab
