@@ -76,7 +76,7 @@ int sq_norm_g ;   //  stores the value of the square of the norm of the subgradi
 int iter_at_aggregate ;  //  iteration number at the time of aggregate
 graphlab::timer timer ; //  time object. Helps in finding the time elapsed.
  
-dd_global_vars(): TOLERANCE(0.0000001),
+dd_global_vars(): TOLERANCE(0.00001),
                   old_dual(200), primal_best(0),
                   converged(false), dual_inc_count(1),
                   history(4,vector<double>()), 
@@ -266,9 +266,7 @@ public graphlab::IS_POD_TYPE
       case 1: //cout<<(1.0/vertex.data().apply_count);
               return(1.0/vertex.data().apply_count);
               break;
-      case 2: if(vertex.data().apply_count == 2)
-             { return (0.7);}
-              else return(2*(old_dual-primal_best)/((norm_g_sq+1) * (dual_inc_count + iter_since_aggregate + 1)));
+      case 2: return(2*(old_dual-primal_best)/((norm_g_sq+1) * (iter_since_aggregate + dual_inc_count + 1)));
                      }
    }
     
@@ -540,7 +538,7 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
         
         CHECK_GE(vdata.best_configuration, 0);                                                            
         CHECK_LT(vdata.best_configuration, vdata.cards[0]);    
-         //cout<< stepsize<<endl;
+        //cout<< stepsize<<endl;
         // Negative subgradient
         edata.multiplier_messages[vdata.best_configuration] -= stepsize; 
         
