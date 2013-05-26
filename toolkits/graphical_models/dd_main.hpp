@@ -172,7 +172,9 @@ void loadUAIfile(graphlab::distributed_control& dc, graph_type& graph, string gr
         
         //CHECK(in.good(), "Could not finish reading factor tables. Are you sure this is a typeUAI energy file?");
         CHECK(in.good());
-        
+         
+         vdata.potentials.maxCoeff(&vdata.best_configuration);
+         
         // allocate factors evenly to different machines.
         if (i%dc.numprocs() != dc.procid()) 
             continue;
