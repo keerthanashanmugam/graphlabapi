@@ -51,6 +51,7 @@
 #include <graphlab/macros_def.hpp>
 
 
+
 using namespace std;
 
 
@@ -63,16 +64,30 @@ typedef Eigen::MatrixXd mat;
 
 
 
+struct dd_global_vars {
+
+double TOLERANCE ;       // The convergence threshold for each message. Smaller values imply tighter convergence but slower execution.
+double old_dual ;        // stores the value of dual objective for the previous iteration
+double primal_best ;     //  stores the value of bestt primal objective found so far.
+bool converged ;         // true if dual objective value has converged to required tolerance level, otherwise false
+int dual_inc_count ;     // keeps track of the number of times the value of dual objective increased
+vector < vector<double> > history ; // stores dual and primal objective values
+int sq_norm_g ;   //  stores the value of the square of the norm of the subgradient vector
+int iter_at_aggregate ;  //  iteration number at the time of aggregate
+graphlab::timer timer ; //  time object. Helps in finding the time elapsed.
+ 
+dd_global_vars(): TOLERANCE(0.00001),
+                  old_dual(200), primal_best(0),
+                  converged(false), dual_inc_count(1),
+                  history(4,vector<double>()), 
+                  sq_norm_g(100), 
+                  iter_at_aggregate(0) {}
+} global_vars;
+/* end of struct dd_global_vars */
 
 
-double TOLERANCE = 0.01;      // The convergence threshold for each message. Smaller values imply tighter convergence but slower execution.
-double old_dual = 100;        // stores the value of dual objective for the previous iteration
-double primal_best  = 0;      //  stores the value of bestt primal objective found so far.
-bool converged = false ;      // true if dual objective value has converged to required tolerance level, otherwise false
-int dual_inc_count = 0;       // keeps track of the number of times the value of dual objective increased
-int last_agg_count = 0;        // number of iterations since last aggregate_periodic call
-mat history(30,3);
-int history_iterator =0;
+
+
 
 /////////////////////////////////////////////////////////////////////////
 // Edge and Vertex data and Graph Type
@@ -99,11 +114,14 @@ struct vertex_data
     vec beliefs;            // Posterior values for the configurations after averaging (projected DD, unary variables only).
     
     int apply_count;        // No. of times apply has been called on this vertex
-    
+    int sum_sq_norm_g;      // sum of square of norm of subgradient for each vertex (used only for factor vertices)
+
+
     vertex_data(): 
     nvars(0), degree(0), 
     dual_contrib(0), primal_contrib(0),
-    apply_count(0), best_configuration(0)
+    apply_count(0), best_configuration(0),
+    sum_sq_norm_g(0)
     {}
     
     void load(graphlab::iarchive& arc) 
@@ -112,7 +130,8 @@ struct vertex_data
             >> cards >> neighbors >> potentials 
             >> dual_contrib >> primal_contrib
             >> best_configuration >> beliefs 
-            >> apply_count;
+            >> apply_count
+            >>sum_sq_norm_g;
     }
     void save(graphlab::oarchive& arc) const 
     {
@@ -120,7 +139,8 @@ struct vertex_data
             << cards << neighbors << potentials 
             << dual_contrib << primal_contrib
             << best_configuration << beliefs 
-            << apply_count;
+            << apply_count 
+            << sum_sq_norm_g;
     }
 }; // end of vertex_data
 
@@ -147,36 +167,41 @@ struct edge_data
     void save(graphlab::oarchive& arc) const {
         arc << varid << card << potentials << multiplier_messages << local_messages;
     }
-};
+};  //end of edge_data
 
 
 /**
  * \brief gather_type is a structure that will be be used as return type of gather function. It includes 
- *  multiplier messages (used both for unary and factor vertices) and neighbor_best_conf (used only for 
- *  factor vertices).
+ *  multiplier messages (used both for unary and factor vertices), neighbor_best_conf (used only for 
+ *  factor vertices) and sq_norm_g (for storing square of norm of subgradient for each edge.
  */
 
 struct gather_type
 { factor_type messages;
   vector <int> neighbor_conf;
+  int sq_norm_g;
      
-    gather_type(){};
+    gather_type():sq_norm_g(0){}
     gather_type(factor_type f): messages(f){}; 
-    gather_type(factor_type f, vector <int> nc): messages(f), neighbor_conf(nc){};
+    gather_type(factor_type f, vector <int> nc, int sg): messages(f), neighbor_conf(nc), sq_norm_g(sg){};
     void load(graphlab::iarchive& arc) {
-        arc >>messages>>neighbor_conf;
+        arc >>messages>>neighbor_conf>>sq_norm_g;
     }
     void save(graphlab::oarchive& arc) const {
-        arc <<messages<<neighbor_conf;
+        arc <<messages<<neighbor_conf<<sq_norm_g;
     }
 
   gather_type& operator+=(const gather_type& other)
  { messages += other.messages;
    neighbor_conf += other.neighbor_conf;
+   sq_norm_g += other.sq_norm_g;
    return *this;
  }
 
 }; // end of gather_type struct
+
+
+
 
 /**
  * The graph type
@@ -228,6 +253,22 @@ public graphlab::IS_POD_TYPE
             (*states)[i] = index / tmp;
         }
     }
+
+    ///////////////////////////////////////////////////////////
+    // Updates stepsize according to different stepsize rules. 
+    ///////////////////////////////////////////////////////////
+
+    double update_stepsize(const graph_type::vertex_type& vertex, int type, double old_dual, double primal_best,int norm_g_sq,
+                                                                             int dual_inc_count,int iter_since_aggregate) const
+   {  switch (type) {
+      case 0: return 1.0;
+              break;
+      case 1: //cout<<(1.0/vertex.data().apply_count);
+              return(1.0/vertex.data().apply_count);
+              break;
+      case 2: return(2*(old_dual-primal_best)/((norm_g_sq+1) * (iter_since_aggregate + dual_inc_count + 1)));
+                     }
+   }
     
     /**
      * \brief Given an edge and a vertex return the other vertex along
@@ -285,10 +326,12 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
      vector of size C_1 + ... + C_K which is zero everywhere except in the 
      k-th slot, where the Lagrange multipliers in "edge.messages" will be copied 
      to. This way, when the "gather sum" takes place, and since all these slots 
-     are disjoint, we will just get the Lagrange multipliers of all the variables.    
+     are disjoint, we will just get the Lagrange multipliers of all the variables.
+     It also gathers the best_configuration of neighbors for the factors and norm
+     of subgraident value for each edge.    
      */
-    gather_type gather(icontext_type& context, const vertex_type& vertex, edge_type& edge) const 
-    {
+     gather_type gather(icontext_type& context, const vertex_type& vertex, edge_type& edge) const 
+     {         
         if (opts.verbose > 1)
             cout << "gather begin" << endl;
         
@@ -334,7 +377,8 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
             CHECK_GE(index_neighbor, 0);
             vector <int> neighbor_conf(vdata.nvars, 0);
             neighbor_conf[index_neighbor] = other_vertex.data().best_configuration;
-            // cout<<vertex.id()<<" "<<other_vertex.id()<<" "<<neighbor_conf[index_neighbor]<<endl;
+            
+
             for (int state = 0; state < vdata.cards[index_neighbor]; ++state) 
             {
                 messages[offset + state] = -edata.multiplier_messages[state];
@@ -348,7 +392,11 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
                 cout << "estimated offset = " << offset << "\n";
                 cout << "Message: " << messages << "\n---\n";
             }
-            gather_type gather_data(messages, neighbor_conf);
+            vector<int> states(vdata.nvars, -1);
+            get_configuration_states(vertex, vdata.best_configuration, &states);
+            int sq_norm_g = (states[index_neighbor] == other_vertex.data().best_configuration)?0:2;
+            //cout<<states[index_neighbor]<<" "<<other_vertex.data().best_configuration<<" "<<sq_norm_g<<endl;
+            gather_type gather_data(messages, neighbor_conf, sq_norm_g);
             return gather_data;
         }
         if (opts.verbose > 2)
@@ -364,6 +412,8 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
      So we need to loop through all possible factor configurations, get the 
      sequence of states of each configuration, fetch the Lagrange multipliers for 
      those states, and add them to the factor potential. Then we compute the argmax. 
+     It also computes dual and primal contribution for finding dual and primal
+     objective values.
      */
     void apply(icontext_type& context, vertex_type& vertex, const gather_type& total) 
     {        
@@ -373,7 +423,10 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
             cout << "begin apply" << endl;
         
         ++vdata.apply_count;
-        ++last_agg_count;
+        
+         
+       
+
         if (vdata.nvars == 1) 
         {
             // Unary factor.
@@ -418,6 +471,7 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
             vdata.dual_contrib = belief.maxCoeff(&vdata.best_configuration);
             int conf_index = get_configuration_index(vertex, total.neighbor_conf);
             vdata.primal_contrib = vdata.potentials[conf_index];
+            vdata.sum_sq_norm_g = total.sq_norm_g;
             //cout<<vertex.id()<<" "<<belief<<endl;
             if (opts.verbose > 1)
             {
@@ -475,15 +529,18 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
         if (opts.verbose > 1)
             cout << "begin scatter" << endl;
           // double stepsize = 1;
-        vector <double> stepsize(3,0);
-        stepsize[0] = 1;
-        stepsize[1] = 1.0/max(vdata.apply_count,other_vdata.apply_count);
-        stepsize[2] = (1001*(old_dual-primal_best)) / ((last_agg_count)*(dual_inc_count+1000));
+              
+          int iter_since_aggregate = (context.iteration()+2) - global_vars.iter_at_aggregate ;
+         //double stepsize = 1.0/max(vdata.apply_count,other_vdata.apply_count);
+         double stepsize = update_stepsize(vertex, opts.stepsize_type, global_vars.old_dual, global_vars.primal_best, 
+                                      global_vars.sq_norm_g, global_vars.dual_inc_count, iter_since_aggregate);
+         
+        
         CHECK_GE(vdata.best_configuration, 0);                                                            
         CHECK_LT(vdata.best_configuration, vdata.cards[0]);    
-         //cout<< stepsize<<endl;
+        //cout<< stepsize<<endl;
         // Negative subgradient
-        edata.multiplier_messages[vdata.best_configuration] -= stepsize[opts.stepsize_type]; 
+        edata.multiplier_messages[vdata.best_configuration] -= stepsize; 
         
         vector<int> states(other_vdata.nvars, -1);
         get_configuration_states(*factor_vertex, other_vdata.best_configuration, &states);
@@ -503,7 +560,7 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
         CHECK_EQ(other_vdata.cards[index_neighbor], vdata.cards[0]);
 
         // Negative subgradient
-        edata.multiplier_messages[states[index_neighbor]] += stepsize[opts.stepsize_type];
+        edata.multiplier_messages[states[index_neighbor]] += stepsize;
         
         //if (opts.verbose > 1)
         if ((opts.verbose>1) && (vertex.id() == 15))
@@ -518,7 +575,7 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
             cout << "end scatter" << endl;
         
         // Signalling the other vertex and yourself to start. 
-        if (vertex.data().apply_count < opts.maxiter && converged == false)
+        if (vertex.data().apply_count < opts.maxiter && global_vars.converged == false)
         {
             context.signal(vertex);
             context.signal(other_vertex);
@@ -532,20 +589,21 @@ struct dd_vertex_program_symmetric : public dd_vertex_program {
 //Aggregator functions to compute primal & dual objective
 
 struct objective
-{ double primal, dual;
+{ double primal, dual, sum_sq_norm_g;
  
-objective(): primal(0), dual(0){};
+objective(): primal(0), dual(0), sum_sq_norm_g(0){};
 
 void load(graphlab::iarchive& arc) {
-        arc >>dual>>primal;
+        arc >>dual>>primal>>sum_sq_norm_g;
     }
     void save(graphlab::oarchive& arc) const {
-        arc <<dual<<primal;
+        arc <<dual<<primal<<sum_sq_norm_g;
     }
 
 objective& operator+=(const objective& other)
 { primal += other.primal;
    dual += other.dual;
+   sum_sq_norm_g += other.sum_sq_norm_g;
    return *this;
  }
 };
@@ -554,43 +612,39 @@ objective sum(dd_vertex_program_symmetric::icontext_type& context, const dd_vert
 { objective retval;
    retval.primal = vertex.data().primal_contrib;
   retval.dual = vertex.data().dual_contrib;
+  retval.sum_sq_norm_g = vertex.data().sum_sq_norm_g;
+  
+  global_vars.iter_at_aggregate = (context.iteration() +2);
   return retval;
 }
 
 void print_obj(dd_vertex_program_symmetric::icontext_type& context, objective total) 
 {
-    cout << "Dual Objective: " << total.dual<< " "<<"Primal Objective: "<<total.primal<<"\n";
-    if (std::fabs(total.dual-old_dual) < TOLERANCE)
-      { converged = true;
-        cout<<" Number of iteration at convergence:"<<context.iteration() +2 <<endl;}
-    else old_dual = total.dual;
-     if (total.primal> primal_best)
-      { primal_best = total.primal;}
-      if (total.dual > old_dual)
-      { dual_inc_count ++;}
-    cout<< "Best Primal so far:"  << primal_best<<endl;
-    last_agg_count = 0;
+    cout << "Dual Objective: " << total.dual<< " "<<"Primal Objective: "<<total.primal<<endl;
+    global_vars.sq_norm_g = total.sum_sq_norm_g;
+       if (total.dual > global_vars.old_dual)
+      { global_vars.dual_inc_count ++;}
 
-if(opts.save_history>0)
-{history(history_iterator,0) = context.iteration() +2;
- history(history_iterator,1) = total.dual;
- history(history_iterator,2) = total.primal;
- history_iterator++;
-}
+    if (std::fabs(total.dual-global_vars.old_dual) < global_vars.TOLERANCE)
+      { global_vars.converged = true;
+        cout<<" Number of iteration at convergence:"<<context.iteration() +2 <<endl;}
+    global_vars.old_dual = total.dual;
+     
+    if (total.primal> global_vars.primal_best)
+      { global_vars.primal_best = total.primal;}
+    
+
+    cout<< "Best Primal so far:"  << global_vars.primal_best<<endl;
+    
+     if (opts.history_file != "\0")
+      {global_vars.history[0].push_back(context.iteration()+2);
+       global_vars.history[1].push_back(global_vars.timer.current_time());
+       global_vars.history[2].push_back(total.dual);
+       global_vars.history[3].push_back(total.primal);
+      }
 }
 /* end of aggregator functions */
 
-
-struct conf_writer {
-    std::string save_vertex(graph_type::vertex_type v) {
-        std::stringstream strm;
-         if(history_iterator != -1)
-       { strm <<history<<endl;
-       history_iterator = -1; }
-        return strm.str();
-    }
-    std::string save_edge(graph_type::edge_type e) { return ""; }
-};
 
 
 
