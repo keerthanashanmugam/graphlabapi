@@ -84,7 +84,8 @@ bool vertex_load(graphlab::distributed_control& dc, graph_type& graph, string im
     }
 
     // creating the adjacency list for the fully connected graph without duplicate edges
-    std::string strn = path + opts.graph_name;
+    //std::string strn = path + opts.graph_name;
+    std::string strn = opts.output_dir + opts.graph_name;
     
     if (opts.verbose > 2)
 	logstream(LOG_EMPH)
@@ -142,7 +143,8 @@ bool vertex_load(graph_type& graph, string img_path, vector<CameraParams>& camer
     }
    
     // creating the adjacency list for the subgraph without duplicate edges
-    std::string strn = path + opts.graph_name; 
+    //std::string strn = path + opts.graph_name; 
+    std::string strn = opts.output_dir + opts.graph_name;
     std::ofstream adjacency_list;
     adjacency_list.open(strn.c_str()); // converting the string to const char*
    

@@ -122,8 +122,9 @@ int main(int argc, char** argv)
     //graph.load(img_dir, vertex_loader);
     //graph_loader(dc, graph_feat, img_dir);
     vertex_load(dc, graph_feat, img_dir);
-    std::string strn = img_dir + "/";
-    strn = strn + opts.graph_name;
+    //std::string strn = img_dir + "/";
+    //strn = strn + opts.graph_name;
+    std::string strn = opts.output_dir + opts.graph_name;
     graph_feat.load(strn, edge_loader);
     graph_feat.finalize();
    
@@ -302,8 +303,9 @@ int main(int argc, char** argv)
     // load the graph
     if (dc.procid()==0) {
     vertex_load(graph_cam, img_dir, cameras, vdlist, indices, pairwise_matches);
-    std::string strn = img_dir + "/";
-    strn = strn + opts.graph_name;
+    //std::string strn = img_dir + "/";
+    //strn = strn + opts.graph_name;
+    std::string strn = opts.output_dir + opts.graph_name;
     graph_cam.load(strn, edge_load);
     }
     graph_cam.finalize();
