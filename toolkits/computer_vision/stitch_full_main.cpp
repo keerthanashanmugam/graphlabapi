@@ -66,8 +66,7 @@ int main(int argc, char** argv)
     clopts.attach_option("img", img_dir,
                          "The directory containing the images");
     clopts.add_positional("img");
-    //clopts.attach_option("graph", graph_path,
-    //                     "The path to the adjacency list file (could be the prefix in case of multiple files)");
+    
     clopts.add_positional("graph");
     clopts.attach_option("output", opts.output_dir,
                          "The directory in which to save the output");
@@ -89,13 +88,7 @@ int main(int argc, char** argv)
         logstream(LOG_ERROR) << "No image directory was provided." << std::endl;
         return EXIT_FAILURE;
     }
-   
-    /*if(graph_path.empty())
-    {
-        logstream(LOG_ERROR) << "No adjacency file provided." << std::endl;
-        return EXIT_FAILURE;
-    }*/
-   
+       
     if (opts.work_megapix > 10)
     {
         logstream(LOG_ERROR) << "Inappropriate value for work_megapix." << std::endl;
@@ -109,7 +102,6 @@ int main(int argc, char** argv)
     << "engine:         " << opts.exec_type << std::endl
     << "scheduler:      " << clopts.get_scheduler_type() << std::endl
     << "img_dir:        " << img_dir << std::endl
-   // << "graph_path:     " << graph_path << std::endl	// no adjacency list is needed here
     << "work_megapix:   " << opts.work_megapix << std::endl
     << "verbose:        " << opts.verbose << std::endl;
    
@@ -119,13 +111,7 @@ int main(int argc, char** argv)
     graph_type graph_feat(dc, clopts);
        
     // load the graph
-    //graph.load(img_dir, vertex_loader);
-    //graph_loader(dc, graph_feat, img_dir);
-    vertex_load(dc, graph_feat, img_dir);
-    //std::string strn = img_dir + "/";
-    //strn = strn + opts.graph_name;
-    std::string strn = opts.output_dir + opts.graph_name;
-    graph_feat.load(strn, edge_loader);
+    graph_loader(dc, graph_feat, img_dir);
     graph_feat.finalize();
    
     ///////////////////////////////////////////////////////
@@ -157,8 +143,7 @@ int main(int argc, char** argv)
     {
         features[i] = vdlist[i].features;
     }
-    //vdlist.clear();
-   
+       
     int num_images = features.size();
    
     ///////////////////////////////////////////////////////
@@ -215,6 +200,12 @@ int main(int argc, char** argv)
     // Leave only images we are sure are from the same panorama
     
     vector<int> indices = leaveBiggestComponent(features, pairwise_matches, opts.conf_thresh);
+    vector<string> img_path(indices.size());
+    for (size_t i=0; i!=indices.size(); ++i)
+    {
+        img_path[i] = vdlist[indices[i]].img_path;
+    }
+    
 
     ///////////////////////////////////////////////////////
     // Homography-Based Initialization
@@ -239,14 +230,13 @@ int main(int argc, char** argv)
     // Bundle Adjustment
     t = getTickCount();
     Ptr<detail::BundleAdjusterBase> adjuster;
-    adjuster = new detail::BundleAdjusterRay();
-//    if (ba_cost_func == "reproj") adjuster = new detail::BundleAdjusterReproj();
-//    else if (ba_cost_func == "ray") adjuster = new detail::BundleAdjusterRay();
-//    else
-//    {
-//        cout << "Unknown bundle adjustment cost function: '" << ba_cost_func << "'.\n";
-//        return -1;
-//    }
+    if (opts.ba_cost_func == "reproj") adjuster = new detail::BundleAdjusterReproj();
+    else if (opts.ba_cost_func == "ray") adjuster = new detail::BundleAdjusterRay();
+    else
+    {
+        cout << "Unknown bundle adjustment cost function: '" << opts.ba_cost_func << "'.\n";
+        return -1;
+    }
     adjuster->setConfThresh(opts.conf_thresh);
     Mat_<uchar> refine_mask = Mat::zeros(3, 3, CV_8U);
     if (opts.ba_refine_mask[0] == 'x') refine_mask(0,0) = 1;
@@ -301,13 +291,9 @@ int main(int argc, char** argv)
     graph_type graph_cam(dc, clopts);
 
     // load the graph
-    if (dc.procid()==0) {
-    vertex_load(graph_cam, img_dir, cameras, vdlist, indices, pairwise_matches);
-    //std::string strn = img_dir + "/";
-    //strn = strn + opts.graph_name;
-    std::string strn = opts.output_dir + opts.graph_name;
-    graph_cam.load(strn, edge_load);
-    }
+    if (dc.procid()==0)
+	graph_loader(graph_cam, img_dir, cameras, img_path, indices, pairwise_matches);
+
     graph_cam.finalize();
     vdlist.clear();
 
@@ -404,7 +390,6 @@ int main(int argc, char** argv)
     blender->blend(result, result_mask);
 
     imwrite(opts.result_name, result);
-    unlink(strn.c_str());
            
     LOGLN("Finished, total time: " << ((getTickCount() - app_start_time) / getTickFrequency()) << " sec");
 

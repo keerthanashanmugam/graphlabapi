@@ -404,7 +404,9 @@ int main(int argc, char* argv[])
     matcher(features, pairwise_matches);
     matcher.collectGarbage();
     LOGLN("Pairwise matching, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec");
-    LOGLN("pairwise_matches.size() = " << pairwise_matches.size() << "\n");
+
+    LOGLN("pairwise_matches.size() = " << pairwise_matches.size() << "\n"); 
+
     for (int i=0; i!=pairwise_matches.size(); ++i) 
     {
         LOGLN("src_img_idx = " << pairwise_matches[i].src_img_idx  << "\t");
@@ -494,9 +496,9 @@ int main(int argc, char* argv[])
     }
 
     sort(focals.begin(), focals.end());
-    //LOGLN("Focals size: " << focals.size() << "\n");
-    //LOGLN(" focals: " << focals[0] << "\t" << focals[1] << "\t" << focals[2] << "\n");  
-    //LOGLN("Focals size: " << focals.size() << "\n");    
+    LOGLN("Focals size: " << focals.size());    //
+    LOGLN(" focals: " << focals[0] << "\t" << focals[1] << "\t" << focals[2] << "\n");  //
+    
 
  
     float warped_image_scale;
@@ -514,6 +516,10 @@ int main(int argc, char* argv[])
         for (size_t i = 0; i < cameras.size(); ++i)
             cameras[i].R = rmats[i];
     }
+
+    LOGLN("Pairwise_matches size : " << pairwise_matches.size() << "\n"); //
+    for (int i=0; i!=pairwise_matches.size(); ++i) //
+        LOGLN("Pairwise_matches : (" << pairwise_matches[i].src_img_idx << "," << pairwise_matches[i].dst_img_idx << ")\n"); //
 
     LOGLN("Warping images (auxiliary)... ");
     t = getTickCount();
@@ -578,9 +584,10 @@ int main(int argc, char* argv[])
         K(1,1) *= swa; K(1,2) *= swa;
 
         corners[i] = warper->warp(images[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
-        //cout << "corners x : " << corners[i].x << "   y : " << corners[i].y << endl;
+        LOGLN("Warp corners x : " << corners[i].x << "   y : " << corners[i].y << "\n"); //
+
         sizes[i] = images_warped[i].size();
-        //cout << "sizes height : " << sizes[i].height << "   width : " << sizes[i].width << endl;
+        LOGLN("Warp sizes height : " << sizes[i].height << "   width : " << sizes[i].width << "\n"); //
 
         warper->warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
     }
@@ -680,9 +687,11 @@ int main(int argc, char* argv[])
                 cameras[i].K().convertTo(K, CV_32F);
                 Rect roi = warper->warpRoi(sz, K, cameras[i].R);
                 corners[i] = roi.tl();
-                //cout << "corner x : " << corners[i].x << "   y : " << corners[i].y << endl;
+                LOGLN("Compose corner x : " << corners[i].x << "   y : " << corners[i].y << "\n"); //
+                
                 sizes[i] = roi.size();
-                //cout << "size height : " << sizes[i].height << "   width : " << sizes[i].width << endl;
+		LOGLN("Compose size height : " << sizes[i].height << "   width : " << sizes[i].width << "\n"); //
+                
             }
         }
         if (abs(compose_scale - 1) > 1e-1)
