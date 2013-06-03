@@ -229,14 +229,14 @@ int main(int argc, char** argv)
     // Bundle Adjustment
     t = getTickCount();
     Ptr<detail::BundleAdjusterBase> adjuster;
-    adjuster = new detail::BundleAdjusterRay();
-//    if (ba_cost_func == "reproj") adjuster = new detail::BundleAdjusterReproj();
-//    else if (ba_cost_func == "ray") adjuster = new detail::BundleAdjusterRay();
-//    else
-//    {
-//        cout << "Unknown bundle adjustment cost function: '" << ba_cost_func << "'.\n";
-//        return -1;
-//    }
+    //adjuster = new detail::BundleAdjusterRay();
+    if (opts.ba_cost_func == "reproj") adjuster = new detail::BundleAdjusterReproj();
+    else if (opts.ba_cost_func == "ray") adjuster = new detail::BundleAdjusterRay();
+    else
+    {
+        cout << "Unknown bundle adjustment cost function: '" << opts.ba_cost_func << "'.\n";
+        return -1;
+    }
     adjuster->setConfThresh(opts.conf_thresh);
     Mat_<uchar> refine_mask = Mat::zeros(3, 3, CV_8U);
     if (opts.ba_refine_mask[0] == 'x') refine_mask(0,0) = 1;

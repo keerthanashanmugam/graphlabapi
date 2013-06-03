@@ -39,140 +39,16 @@
 #include "iostream"
 
 /////////////////////////////////////////////////////////////////////////
-// Vertex Load (used to read images and load the vertex data of the graph).
-// The function also creates an adjacency list for fully connected graph
-bool vertex_load(graphlab::distributed_control& dc, graph_type& graph, string img_path)
-{
-    // force a "/" at the end of the path
-    // make sure to check that the path is non-empty. (you do not
-    // want to make the empty path "" the root path "/" )
-    string path = img_path;
-    if (path.length() > 0 && path[path.length() - 1] != '/') path = path + "/";
-   
-    vector<string> graph_files;
-    string search_prefix;
-    graphlab::fs_util::list_files_with_prefix(path, search_prefix, graph_files);
-   
-    if (graph_files.size() == 0)
-        logstream(LOG_WARNING) << "No files found in " << path << std::endl;
-    
-    // vertex data & id
-    graphlab::vertex_id_type vid(-1);
-   
-    ///////////////////////////////////////////////////////
-    // Loop over files
-    for(size_t i = 0; i < graph_files.size(); ++i)
-    {
-        // Each machine loads corresponding file
-        if (i % dc.numprocs() == dc.procid())
-        {
-            if (opts.verbose > 0)
-                logstream(LOG_EMPH)
-                << "Process: " << dc.procid() << "/" << dc.numprocs() << " "
-                << "picked image: " << graph_files[i] << "\n";
-           
-           
-            vid = i;
-            vertex_data vdata;
-            vdata.empty = false;
-            vdata.img_path = graph_files[i];
-            vdata.features.img_idx = i;
-           
-            graph.add_vertex(vid, vdata);
-           
-        }
-    }
-
-    // creating the adjacency list for the fully connected graph without duplicate edges
-    //std::string strn = path + opts.graph_name;
-    std::string strn = opts.output_dir + opts.graph_name;
-    
-    if (opts.verbose > 2)
-	logstream(LOG_EMPH)
-        << "Graph file path (adjacency list): " << strn << "\n";
-
-    std::ofstream adjacency_list;
-    adjacency_list.open(strn.c_str());	// converting the string to const char*
-
-    if (!adjacency_list)
-    {
-	logstream(LOG_ERROR) << "File could not be opened\n";
-        return EXIT_FAILURE;
-    }
-
-    for(size_t i = 0; i < graph_files.size()-1; i++)
-    {
-        adjacency_list << i << " " << graph_files.size()-i-1;
-	for(size_t j = i+1; j < graph_files.size(); j++)
-	{
-	    adjacency_list << " " << j;
-	}
-	adjacency_list << "\n";
-    }
-    adjacency_list.close();
-
-    return true;
-}
-
-// Second loader that only a single machine calls and pre-loads cameras.
-// 
-bool vertex_load(graph_type& graph, string img_path, vector<CameraParams>& cameras, 
-                    vector<vertex_data>& vdlist, vector<int> indices, vector<MatchesInfo>& pairwise_matches)
-{
-    // force a "/" at the end of the path
-    // make sure to check that the path is non-empty. (you do not
-    // want to make the empty path "" the root path "/" )
-    string path = img_path;
-    if (path.length() > 0 && path[path.length() - 1] != '/') path = path + "/";
-   
-    graphlab::vertex_id_type vid(-1);
-   
-    ///////////////////////////////////////////////////////
-    // Loop over files
-    for(size_t i = 0; i < indices.size(); ++i)
-    {
-        vid = i;
-        vertex_data vdata;
-        vdata.empty = false;
-        vdata.img_path = vdlist[indices[i]].img_path;
-        vdata.features.img_idx = i;
-       
-        vdata.camera = cameras[i]; // addition to above function.
-
-        graph.add_vertex(vid, vdata);
-    }
-   
-    // creating the adjacency list for the subgraph without duplicate edges
-    //std::string strn = path + opts.graph_name; 
-    std::string strn = opts.output_dir + opts.graph_name;
-    std::ofstream adjacency_list;
-    adjacency_list.open(strn.c_str()); // converting the string to const char*
-   
-    for(size_t i = 0; i < pairwise_matches.size(); ++i)
-    {
-	if (pairwise_matches[i].src_img_idx > -1 && pairwise_matches[i].dst_img_idx > -1)
-	{
-	    if (pairwise_matches[i].src_img_idx < pairwise_matches[i].dst_img_idx)	// no duplicate edges are allowed
-		adjacency_list << pairwise_matches[i].src_img_idx << " " << pairwise_matches[i].dst_img_idx << "\n";
-	}
-    }
-
-    adjacency_list.close();
-
-    return true;
-}
-
-/////////////////////////////////////////////////////////////////////////
 // Graph Loader (used to read images and load the vertex and edge data of
 // the graph. There is an edge between every pair of vertices in the graph,  
-// i.e. the graph is fully connected
+// i.e. the graph is fully connected. (Used in stitch_full_main)
 
-bool graph_loader(graphlab::distributed_control& dc, graph_type& graph, string img_path)
+bool graph_loader(graphlab::distributed_control& dc, graph_type& graph, string img_dir)
 {
     // force a "/" at the end of the path
     // make sure to check that the path is non-empty. (you do not
     // want to make the empty path "" the root path "/" )
-    string path = img_path;
+    string path = img_dir;
     if (path.length() > 0 && path[path.length() - 1] != '/') path = path + "/";
    
     vector<string> graph_files;
@@ -181,6 +57,11 @@ bool graph_loader(graphlab::distributed_control& dc, graph_type& graph, string i
    
     if (graph_files.size() == 0)
         logstream(LOG_WARNING) << "No files found in " << path << std::endl;
+
+    
+    if (opts.verbose > 2)
+        logstream(LOG_EMPH)
+        << "Total number of images: " << graph_files.size() << "\n";
    
     // vertex data & id
     graphlab::vertex_id_type vid(-1);
@@ -206,14 +87,20 @@ bool graph_loader(graphlab::distributed_control& dc, graph_type& graph, string i
             vdata.features.img_idx = i;
            
             graph.add_vertex(vid, vdata);
+
+            if (opts.verbose > 2)
+                logstream(LOG_EMPH)
+                << "Vertex " << i << " Image: " << vdata.img_path << "\n"; 
            
         }
     }
    
+    // Adding edges between every pair of vertices to create a fully connected graph
+    // no duplicate edges are added
     for(size_t i = 0; i < graph_files.size()-1; ++i)
     {
 	vid = i;
-	for(size_t j = i; j < graph_files.size(); ++j)
+	for(size_t j = i+1; j < graph_files.size(); ++j)
 	{
 	    other_vid = j;
 	    if (opts.verbose > 0)
@@ -223,6 +110,72 @@ bool graph_loader(graphlab::distributed_control& dc, graph_type& graph, string i
             graph.add_edge(vid,other_vid,edata);
 	}
     }
+    return true;
+}
+
+// Second Graph loader that only a single machine calls and pre-loads cameras.
+// It adds only the selected edges to the subgraph of the fully connected graph.
+// (Used in stitch_full_main)
+bool graph_loader(graph_type& graph, string img_dir, vector<CameraParams>& cameras, 
+                  vector<string>& img_path, vector<int> indices, vector<MatchesInfo>& pairwise_matches)
+{
+    // force a "/" at the end of the path
+    // make sure to check that the path is non-empty. (you do not
+    // want to make the empty path "" the root path "/" )
+    string path = img_dir;
+    if (path.length() > 0 && path[path.length() - 1] != '/') path = path + "/";
+    
+    // vertex data & id   
+    graphlab::vertex_id_type vid(-1);
+    graphlab::vertex_id_type other_vid;
+   
+    if (opts.verbose > 2)
+        logstream(LOG_EMPH)
+        << "Total number of vertices in the second graph: " << indices.size() << "\n";
+   
+    ///////////////////////////////////////////////////////
+    // Loop over files
+    for(size_t i = 0; i < indices.size(); ++i)
+    {
+        vid = i;
+        vertex_data vdata;
+        vdata.empty = false;
+        vdata.img_path = img_path[i];
+        vdata.features.img_idx = i;
+       
+        vdata.camera = cameras[i]; // addition to above function.
+
+        graph.add_vertex(vid, vdata);
+    }
+   
+    // Adding edges between selected pair of vertices to create a subgraph of the fully connected graph
+    // no duplicate edges are added
+    
+    if (opts.verbose > 2)
+            logstream(LOG_EMPH)
+            << "Pairwise_matches size : " << pairwise_matches.size() << "\n";
+
+    for(size_t i = 0; i < pairwise_matches.size(); ++i)
+    {
+	if (opts.verbose > 2)
+            logstream(LOG_EMPH)
+            << "Pairwise_matches : (" << pairwise_matches[i].src_img_idx << "," << pairwise_matches[i].dst_img_idx << ")\n";
+   	
+	if (pairwise_matches[i].src_img_idx >= 0 && pairwise_matches[i].dst_img_idx >= 0)
+	{
+	    if (pairwise_matches[i].src_img_idx < pairwise_matches[i].dst_img_idx)	// no duplicate edges are allowed
+	    {
+		vid = pairwise_matches[i].src_img_idx;
+		other_vid = pairwise_matches[i].dst_img_idx;
+		if (opts.verbose > 0)
+            	    logstream(LOG_EMPH) << "Adding edge: (" << vid << "," << other_vid << ")\n";
+       
+                edge_data edata; edata.empty = false;
+                graph.add_edge(vid,other_vid,edata);
+	    }
+	}
+    }
+
     return true;
 }
 
@@ -309,52 +262,6 @@ bool vertex_loader(graph_type& graph, string img_path, vector<CameraParams>& cam
         graph.add_vertex(vid, vdata);
     }
    
-    return true;
-}
-
-/////////////////////////////////////////////////////////////////////////
-// Edge Loader (used to read the adjacency list and add edges to the graph)
-// No adjacency list is given externally. It is produced from vertex_load function.
-bool edge_load(graph_type& graph, const std::string& fname,
-                   const std::string& textline)
-{
-    if ( textline.length() == 0 || textline[0] == '#' )
-        return true; // empty or comment line, return
-   
-    std::stringstream strm(textline);
-    graphlab::vertex_id_type vid;
-       
-    // first entry in the line is a source vertex ID
-    strm >> vid;
-   
-    if (opts.verbose > 0)
-        logstream(LOG_EMPH) << "Here's the input: "
-        << textline << "\n"
-        << vid << "\n";
-   
-    // Line should contain at least 1 more number (second vertex of an edge)
-    if (!strm.good())
-    {
-        logstream(LOG_ERROR) << "The following ajacency list line is incomplete(check adj_list standard):\n"
-        << textline << std::endl;
-        return EXIT_FAILURE;
-    }
-       
-    // second entry is the destination vertex ID
-       
-    graphlab::vertex_id_type other_vid;
-    strm >> other_vid;
-       
-    // only add edges in one direction
-    //if (other_vid < vid)
-    //    continue;
-       
-    if (opts.verbose > 0)
-        logstream(LOG_EMPH) << "Adding edge: (" << vid << "," << other_vid << ")\n";
-       
-    edge_data edata; edata.empty = false;
-    graph.add_edge(vid,other_vid,edata);
-       
     return true;
 }
 
