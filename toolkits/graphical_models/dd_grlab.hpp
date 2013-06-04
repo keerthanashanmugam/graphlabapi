@@ -76,7 +76,7 @@ int sq_norm_g ;   //  stores the value of the square of the norm of the subgradi
 int iter_at_aggregate ;  //  iteration number at the time of aggregate
 graphlab::timer timer ; //  time object. Helps in finding the time elapsed.
  
-dd_global_vars(): TOLERANCE(0.00001),
+dd_global_vars(): TOLERANCE(0.001),
                   old_dual(200), primal_best(0),
                   converged(false), dual_inc_count(1),
                   history(4,vector<double>()), 
