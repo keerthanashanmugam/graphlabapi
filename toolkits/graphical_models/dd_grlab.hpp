@@ -49,7 +49,7 @@
 
 #include <graphlab.hpp>
 #include <graphlab/macros_def.hpp>
-
+#include "ad3/GenericFactor_main.hpp"
 
 
 using namespace std;
@@ -66,7 +66,7 @@ typedef Eigen::MatrixXd mat;
 
 struct dd_global_vars {
 
-double TOLERANCE ;       // The convergence threshold for each message. Smaller values imply tighter convergence but slower execution.
+//double TOLERANCE ;       // The convergence threshold for each message. Smaller values imply tighter convergence but slower execution.
 double old_dual ;        // stores the value of dual objective for the previous iteration
 double primal_best ;     //  stores the value of bestt primal objective found so far.
 bool converged ;         // true if dual objective value has converged to required tolerance level, otherwise false
@@ -76,8 +76,7 @@ int sq_norm_g ;   //  stores the value of the square of the norm of the subgradi
 int iter_at_aggregate ;  //  iteration number at the time of aggregate
 graphlab::timer timer ; //  time object. Helps in finding the time elapsed.
  
-dd_global_vars(): TOLERANCE(0.0000000001),
-                  old_dual(200), primal_best(0),
+dd_global_vars(): old_dual(200), primal_best(0),
                   converged(false), dual_inc_count(1),
                   history(4,vector<double>()), 
                   sq_norm_g(100), 
@@ -626,7 +625,7 @@ void print_obj(dd_vertex_program::icontext_type& context, objective total)
        if (total.dual > global_vars.old_dual)
       { global_vars.dual_inc_count ++;}
 
-    if (std::fabs(total.dual-global_vars.old_dual) < global_vars.TOLERANCE)
+    if (std::fabs(total.dual-global_vars.old_dual) < opts.dualimprovthres)
       { global_vars.converged = true;
         cout<<" Number of iteration at convergence:"<<context.iteration() +2 <<endl;}
     global_vars.old_dual = total.dual;
@@ -761,12 +760,12 @@ struct dd_vertex_program_projected : public dd_vertex_program {
         {if (context.iteration()%2 != 0) 
         {
             // Unary factor. Divide by vertex degree.
-            vdata.primal_contrib = vdata.potentials[vdata.best_configuration];
-            
+                       
             vdata.beliefs = total.messages / static_cast<double>(vdata.degree);
             vdata.beliefs.maxCoeff(&vdata.best_configuration);
+            vdata.primal_contrib = vdata.potentials[vdata.best_configuration];
                    
-            return;}
+            }
         } 
         else 
          {if(context.iteration()%2 == 0)
