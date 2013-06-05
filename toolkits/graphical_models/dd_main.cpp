@@ -62,6 +62,7 @@ int main(int argc, char** argv)
     clopts.add_positional("stepsize_type");
     clopts.attach_option("dualimprovthres", opts.dualimprovthres,
                          "The tolerance level for Dual Convergence.");
+     clopts.add_positional("dualimprovthres");                    
     clopts.attach_option("pdgapthres", opts.pdgapthres,
                          "The tolerance level for Primal-Dual Gap.");
     clopts.attach_option("maxiter", opts.maxiter,
