@@ -76,7 +76,7 @@ int sq_norm_g ;   //  stores the value of the square of the norm of the subgradi
 int iter_at_aggregate ;  //  iteration number at the time of aggregate
 graphlab::timer timer ; //  time object. Helps in finding the time elapsed.
  
-dd_global_vars(): TOLERANCE(0.001),
+dd_global_vars(): TOLERANCE(0.0000000001),
                   old_dual(200), primal_best(0),
                   converged(false), dual_inc_count(1),
                   history(4,vector<double>()), 
@@ -182,8 +182,7 @@ struct gather_type
   int sq_norm_g;
      
     gather_type():sq_norm_g(0){}
-    gather_type(factor_type f): messages(f){}; 
-    gather_type(factor_type f, vector <int> nc, int sg): messages(f), neighbor_conf(nc), sq_norm_g(sg){};
+    gather_type(factor_type f, vector <int> nc = vector <int> (), int sg = 0): messages(f), neighbor_conf(nc), sq_norm_g(sg){};
     void load(graphlab::iarchive& arc) {
         arc >>messages>>neighbor_conf>>sq_norm_g;
     }
@@ -195,6 +194,7 @@ struct gather_type
  { messages += other.messages;
    neighbor_conf += other.neighbor_conf;
    sq_norm_g += other.sq_norm_g;
+   
    return *this;
  }
 
@@ -608,19 +608,20 @@ objective& operator+=(const objective& other)
  }
 };
 
-objective sum(dd_vertex_program_symmetric::icontext_type& context, const dd_vertex_program_symmetric::vertex_type& vertex)
+objective sum(dd_vertex_program::icontext_type& context, const dd_vertex_program::vertex_type& vertex)
 { objective retval;
+  
    retval.primal = vertex.data().primal_contrib;
   retval.dual = vertex.data().dual_contrib;
   retval.sum_sq_norm_g = vertex.data().sum_sq_norm_g;
   
-  global_vars.iter_at_aggregate = (context.iteration() +2);
+  global_vars.iter_at_aggregate = (context.iteration() +2); 
   return retval;
 }
 
-void print_obj(dd_vertex_program_symmetric::icontext_type& context, objective total) 
-{
-    cout << "Dual Objective: " << total.dual<< " "<<"Primal Objective: "<<total.primal<<endl;
+void print_obj(dd_vertex_program::icontext_type& context, objective total) 
+{  if ( context.iteration() % 2 != 0)
+    {  cout << "Dual Objective: " << total.dual<< " "<<"Primal Objective: "<<total.primal<<endl;
     global_vars.sq_norm_g = total.sum_sq_norm_g;
        if (total.dual > global_vars.old_dual)
       { global_vars.dual_inc_count ++;}
@@ -642,6 +643,7 @@ void print_obj(dd_vertex_program_symmetric::icontext_type& context, objective to
        global_vars.history[2].push_back(total.dual);
        global_vars.history[3].push_back(total.primal);
       }
+  }
 }
 /* end of aggregator functions */
 
@@ -689,20 +691,22 @@ struct dd_vertex_program_projected : public dd_vertex_program {
      */
     gather_type gather(icontext_type& context, const vertex_type& vertex, 
                        edge_type& edge) const {
-        cout << "gather begin" << endl;
+        //cout << "gather begin" << endl;
         const vertex_type other_vertex = get_other_vertex(edge, vertex);
         const vertex_data& vdata = vertex.data();
         edge_data& edata = edge.data();
-        
-        if (vdata.nvars == 1) 
+        if (vdata.nvars == 1 ) 
+        //if (vdata.nvars == 1 && context.iteration()%2 != 0) 
         {
             // Unary factor.
+            if (opts.verbose > 0) {
             cout << "This unary factor has " << vertex.num_in_edges() << 
-            " in edges and " << vertex.num_out_edges() << " out edges" << endl;
+            " in edges and " << vertex.num_out_edges() << " out edges" << endl; }
             gather_type gatherdata(edata.local_messages);
             return gatherdata; 
         } 
         else 
+        //if(vdata.nvars > 1 && context.iteration()%2 == 0)
         {
             // General factor.
             factor_type messages;
@@ -719,21 +723,21 @@ struct dd_vertex_program_projected : public dd_vertex_program {
                 offset += vdata.cards[k];
             }
             CHECK_GE(index_neighbor, 0);
-            //const vec &unary_potential = other_vertex.data().potential;
-            //int degree = other_vertex.data().degree;
+            vector <int> neighbor_conf(vdata.nvars, 0);
+            neighbor_conf[index_neighbor] = other_vertex.data().best_configuration;
             
             for (int state = 0; state < vdata.cards[index_neighbor]; ++state) {
                 messages[offset + state] = edata.multiplier_messages[state];
                 // TODO: somehow set the "edge potential" to be the potential of the
                 // unary variable divided by the number of factors in which that 
                 // variable appears.
-                messages[offset + state] += edata.potentials[state]; 
-                //message[offset + state] += unary_potential[state] / static_cast<double>(degree);
+              //cout<<edge.source().id()<<" "<<edge.target().id()<<" "<<edata.potentials[state]<<endl;
+                messages[offset + state] += edata.potentials[state];               
             }
-            gather_type gather_data(messages);
+            gather_type gather_data(messages,neighbor_conf);
             return gather_data;
         }
-        cout << "gather end" << endl;
+       // cout << "gather end" << endl;
     }; // end of gather function
     
     /**
@@ -750,13 +754,23 @@ struct dd_vertex_program_projected : public dd_vertex_program {
      */
     void apply(icontext_type& context, vertex_type& vertex, 
                const gather_type& total) {
+        
         vertex_data& vdata = vertex.data();
-        cout << "begin apply" << endl;
-        if (vdata.nvars == 1) {
+        //cout << "begin apply" << endl;
+        if (vdata.nvars == 1 ) 
+        {if (context.iteration()%2 != 0) 
+        {
             // Unary factor. Divide by vertex degree.
+            vdata.primal_contrib = vdata.potentials[vdata.best_configuration];
+            
             vdata.beliefs = total.messages / static_cast<double>(vdata.degree);
-            return;
-        } else {
+            vdata.beliefs.maxCoeff(&vdata.best_configuration);
+                   
+            return;}
+        } 
+        else 
+         {if(context.iteration()%2 == 0)
+           {
             // General factor.
             vec beliefs = vdata.potentials;
             int num_configurations = vdata.potentials.size();
@@ -774,12 +788,16 @@ struct dd_vertex_program_projected : public dd_vertex_program {
                 }
             }
             // Save the best configuration for this factor.
-            beliefs.maxCoeff(&vdata.best_configuration);
+                         
+            vdata.dual_contrib = beliefs.maxCoeff(&vdata.best_configuration);
+            int conf_index = get_configuration_index(vertex, total.neighbor_conf);
+            vdata.primal_contrib = vdata.potentials[conf_index]; 
+            }
         }
-        cout << "end apply" << endl;
+       // cout << "end apply" << endl;
     }; // end of apply
     
-    /**
+        /**
      * \brief Since the MRF is undirected we will use all edges for gather and
      * scatter
      */
@@ -800,13 +818,21 @@ struct dd_vertex_program_projected : public dd_vertex_program {
                  edge_type& edge) const {  
         const vertex_data& vdata = vertex.data();
         edge_data& edata = edge.data();
-        cout << "begin scatter" << endl;
-        if (vdata.nvars == 1) {
+        const vertex_type other_vertex = get_other_vertex(edge, vertex);
+        //cout << "begin scatter" << endl;
+        if (vdata.nvars == 1 ) 
+        //if (vdata.nvars == 1 && context.iteration()%2 != 0) 
+        { if (context.iteration()%2 != 0) {
             // Unary factor. Update the messages (Lagrange multipliers).      
-            double stepsize = 1.0; // TODO: Make this decay over iteration number.
+            double stepsize = 1.0/(context.iteration()+2); // TODO: Make this decay over iteration number.
+            
             edata.multiplier_messages += (vdata.beliefs - edata.local_messages) * stepsize;
-        } else {
-            // General factor. Update the local MAPs.
+          }  
+        } 
+       else 
+        //if(vdata.nvars > 1 && context.iteration()%2 == 0)
+        {   if (context.iteration()%2 == 0) {
+            //General factor. Update the local MAPs.
             const vertex_type &unary_vertex = get_other_vertex(edge, vertex);
             vector<int> states(vdata.nvars, -1);
             get_configuration_states(vertex, vdata.best_configuration, &states);
@@ -825,11 +851,16 @@ struct dd_vertex_program_projected : public dd_vertex_program {
             CHECK_LT(states[index_neighbor], vdata.cards[index_neighbor]);
             CHECK_EQ(vdata.cards[index_neighbor], unary_vertex.data().cards[0]);
             edata.local_messages.setZero();
-            edata.local_messages[states[index_neighbor]] += 1.0;
+            edata.local_messages[states[index_neighbor]] += 1.0; }
         }
-        cout << "end scatter" << endl;
+        
+        if ((context.iteration()+1) < opts.maxiter && global_vars.converged == false)
+        {
+            context.signal(vertex);
+            context.signal(other_vertex);
+        }
+
+       // cout << "end scatter" << endl;
     }; // end of scatter
 }; // end of class dd_vertex_program_projected
-
-
 #endif
