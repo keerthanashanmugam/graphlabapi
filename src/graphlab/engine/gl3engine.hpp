@@ -317,8 +317,6 @@ class gl3engine {
   size_t num_vthreads;
   // number of worker threads
   size_t ncpus;
-
-  bool all_fast_path; // if set, the RPC handlers will evaluate the subtasks directly
   // A reference to the graph
   graph_type& graph;
   // the subtask types
@@ -379,9 +377,8 @@ class gl3engine {
    */
   std::vector<simple_spinlock> elocks;
 
-  // If True adds tracking for the task retire time
-  bool track_task_retire_time;
-  atomic<size_t> total_task_time;
+
+
 
   fiber_group execution_group;
 
@@ -389,8 +386,6 @@ class gl3engine {
   friend struct gl3task_descriptor<GraphType, engine_type>;
   template <typename, typename, typename>
   friend struct map_reduce_neighbors_task_descriptor;
-  template <typename, typename, typename, typename>
-  friend struct map_reduce_neighbors_task2_descriptor;
   friend struct broadcast_task_descriptor<GraphType, engine_type>;
   friend struct edge_transform_task_descriptor<GraphType, engine_type>;
   friend struct dht_gather_task_descriptor<GraphType, engine_type>;
@@ -409,24 +404,13 @@ class gl3engine {
 /*                                                                        */
 /**************************************************************************/
 
-  void worker_wake(size_t workerid) {
-    rmi.dc().stop_handler_threads(workerid, ncpus);
-  }
-
-  void worker_sleep(size_t workerid) {
-    rmi.dc().start_handler_threads(workerid, ncpus);
-  }
  public:
   gl3engine(distributed_control& dc, graph_type& graph,
             graphlab_options opts = graphlab_options()):
-      rmi(dc, this), graph(graph),
-      ncpus(opts.get_ncpus()),
-      execution_group(opts.get_ncpus(), 64 * 1024) {
+      rmi(dc, this), graph(graph), execution_group(opts.get_ncpus(), 64 * 1024) {
     rmi.barrier();
     num_vthreads = 10000;
-    all_fast_path = false;
-    track_task_retire_time = false;
-
+    ncpus = opts.get_ncpus();
     worker_mutex.resize(ncpus);
 
     execution_group.set_tls_deleter(free);
@@ -439,18 +423,7 @@ class gl3engine {
         if (rmi.procid() == 0)
           logstream(LOG_EMPH) << "Engine Option: num_vthreads = "
                               << num_vthreads << std::endl;
-    } else if (opt == "track_task_time") {
-      opts.get_engine_args().get_option("track_task_time", track_task_retire_time);
-      if (rmi.procid() == 0)
-        logstream(LOG_EMPH) << "Engine Option: track_task_time = "
-          << track_task_retire_time << std::endl;
-    } else if (opt == "all_fast_path") {
-        opts.get_engine_args().get_option("all_fast_path", all_fast_path);
-        if (rmi.procid() == 0)
-          logstream(LOG_EMPH) << "Engine Option: all_fast_path = "
-                              << all_fast_path << std::endl;
-      }
-      else {
+      } else {
         logstream(LOG_FATAL) << "Unexpected Engine Option: " << opt << std::endl;
       }
     }
@@ -552,9 +525,6 @@ class gl3engine {
   void internal_schedule(const lvid_type lvid,
                          const message_type& message) {
     scheduler_ptr->schedule(lvid, message);
-    //if (execution_group.num_threads() < num_vthreads/4) {
-    //if (execution_group.num_active() < 2 * ncpus &&
-    //      execution_group.num_threads() < num_vthreads) {
     if (active_vthread_count < ncpus) {
       launch_a_vthread();
     }
@@ -695,17 +665,6 @@ class gl3engine {
         create_map_reduce_task_impl::template create<NORMALIZE_FUNCTION(MapFn)>(mapfn, combinefn);
     rmi.barrier();
   }
-
-  template <typename MapFn, typename CombineFn>
-  void register_map_reduce2(size_t id,
-                           MapFn mapfn,
-                           CombineFn combinefn) {
-    typedef typename boost::mpl::at_c<boost::function_types::parameter_types<MapFn>, 3>::type MapFMessageType;
-    ASSERT_LT(id, 224);
-    task_types[id] = new map_reduce_neighbors_task2_descriptor<GraphType, engine_type, FRESULT(MapFn), MapFMessageType>(mapfn, combinefn);
-    rmi.barrier();
-  }
-
 
   /**
    * Registers an edge transform that can
@@ -1052,16 +1011,11 @@ class gl3engine {
   };
 
   void wait_on_combiner(future_combiner& combiner) {
-    if (combiner.count_down > 0 &&
-        fiber_group::fast_yieldable() <= 1 &&
-        execution_group.num_threads() < scheduler_ptr->approx_size() / 4 &&
-        execution_group.num_threads() < num_vthreads) {
-      launch_a_vthread();
-    }
-
     combiner.lock.lock();
     while (combiner.count_down != 0) {
-      // the task thread
+      if (execution_group.num_active() == 0 && execution_group.num_threads() < num_vthreads) {
+        launch_a_vthread();
+      }
       fiber_group::deschedule_self(&combiner.lock.m_mut);
       combiner.lock.lock();
     }
@@ -1308,8 +1262,7 @@ class gl3engine {
       }
     }
     // do we fast path it?
-    if (all_fast_path || task_types[task_id]->fast_path(param)) {
-    //if (1) {
+    if (task_types[task_id]->fast_path(param)) {
       // fast path
       any ret = task_types[task_id]->exec(graph, vid, param, this);
       // return to origin
@@ -1330,6 +1283,7 @@ class gl3engine {
       t->vid = vid;
       size_t target_queue = (thread_counter++) % ncpus;
       local_tasks[target_queue]->enqueue(t);
+
       // if the subtask thread handing this task is not alive any more,
       // re-create it.
       //std::cout << "subtask thread " << target_queue << " stat: " << (int)subtask_thread_alive[target_queue] << "\n";
@@ -1349,7 +1303,6 @@ class gl3engine {
       }
     }
   }
-
 
   /**
    * Reads a subtask from a queue and runs it.
@@ -1502,12 +1455,9 @@ class gl3engine {
     vertex_type vertex(graph.l_vertex(lvid));
     context.lvid = lvid;
 
-    timer ti;
 
     // logger(LOG_EMPH, "Running vertex %ld", vertex.id());
     active_function(context, vertex, msg);
-
-    if (track_task_retire_time) total_task_time.inc(ti.current_time_millis());
 
     scheduler_task_epilogue(lvid);
 
@@ -1532,31 +1482,19 @@ class gl3engine {
    * Creates a vthread with a given worker ID
    */
   void subtask_thread_start(size_t id) {
-      rmi.dc().stop_handler_threads(id % ncpus, ncpus);
     //std::cout << "Subtask thread " << id << " started\n";
     GL3TLS::SET_IN_VTHREAD_TASK(false);
-    // size_t ctr = timer::approx_time_millis();
-    size_t retry = 0;
+    size_t ctr = timer::approx_time_millis();
+    rmi.dc().stop_handler_threads(id % ncpus, ncpus);
     while(1) {
       rmi.dc().handle_incoming_calls(id % ncpus, ncpus);
       bool haswork = exec_subtasks(id % ncpus);
       // we should yield every so often
-      fiber_group::yield();
+      if (timer::approx_time_millis() >= ctr + 100) {
+        fiber_group::yield();
+        ctr = timer::approx_time_millis();
+      }
       if (!haswork) {
-        ++retry;
-	while(retry < 100) {
-           rmi.dc().handle_incoming_calls(id % ncpus, ncpus);
-	   haswork = exec_subtasks(id % ncpus);
-           fiber_group::yield();
-	   if (haswork) {
-	     break;
-	   }
-           ++retry;
-	}
-        if (haswork) {
-          retry = 0;
-          continue;
-        }
         subtask_thread_alive[id] = 1;
         asm volatile ("" : : : "memory");
         subtask_thread_alive_lock[id].lock();
@@ -1572,8 +1510,8 @@ class gl3engine {
         }
       }
     }
+    rmi.dc().start_handler_threads(id % ncpus, ncpus);
     //std::cout << "Subtask thread " << id << " ended\n";
-      rmi.dc().start_handler_threads(id % ncpus, ncpus);
   }
 
 
@@ -1585,10 +1523,7 @@ class gl3engine {
     size_t ctr = timer::approx_time_millis();
     while(1) {
       rmi.dc().handle_incoming_calls(fiber_group::get_worker_id(), ncpus);
-      exec_subtasks(fiber_group::get_worker_id());
-      GL3TLS::SET_IN_VTHREAD_TASK(true);
       bool haswork = exec_scheduler_task(0);
-
       // we should yield every so often
       if (timer::approx_time_millis() >= ctr + 100) {
         fiber_group::yield();
@@ -1664,15 +1599,6 @@ class gl3engine {
     rmi.all_reduce(ctasks);
     total_tasks_completed = ctasks;
 
-    if (track_task_retire_time) {
-      ctasks = total_task_time.value;
-      rmi.all_reduce(ctasks);
-      total_task_time = ctasks;
-      if (rmi.procid() == 0) {
-        std::cout << "Average Task Time (ms) = "
-          << double(total_task_time.value) / total_tasks_completed << "\n";
-      }
-    }
     consensus->reset();
     rmi.barrier();
 
