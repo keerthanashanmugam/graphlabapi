@@ -83,6 +83,7 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
+   
     ///! display settings  
     if(dc.procid() == 0) 
     {
@@ -105,10 +106,12 @@ int main(int argc, char** argv)
     //    graph.load(graph_dir, edge_loader);
     loadUAIfile(dc, graph, opts.graph_file);
     graph.finalize();
+    graph.transform_vertices(compute_degree);
+    graph.transform_edges(dist_unary_potentials);
     
     // Define the engine.
-    typedef graphlab::omni_engine<dd_vertex_program_symmetric> engine_type;
-    //typedef graphlab::omni_engine<dd_vertex_program_projected> engine_type;
+    //typedef graphlab::omni_engine<dd_vertex_program_symmetric> engine_type;
+    typedef graphlab::omni_engine<dd_vertex_program_projected> engine_type;
 
     // Instantiate the engine object
     engine_type engine(dc, graph, opts.exec_type, clopts);
@@ -122,7 +125,7 @@ int main(int argc, char** argv)
 
     // The main command. Run graphlab
     engine.start();  
-    engine.aggregate_now("pd_obj");
+   // engine.aggregate_now("pd_obj");
     
     const double runtime = timer.current_time();    
     dc.cout() 
