@@ -49,7 +49,7 @@
 
 #include <graphlab.hpp>
 #include <graphlab/macros_def.hpp>
-#include "ad3/GenericFactor_main.hpp"
+//#include "ad3/GenericFactor_main.hpp"
 
 
 using namespace std;
