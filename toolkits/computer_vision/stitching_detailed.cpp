@@ -386,8 +386,10 @@ int main(int argc, char* argv[])
         (*finder)(img, features[i]);
         features[i].img_idx = i;
         LOGLN("Features in image #" << i << ": " << features[i].keypoints.size());
-
+        LOGLN("Size of feature image #" << i << ": " << img.cols << "  " << img.rows); //
+        
         resize(full_img, img, Size(), seam_scale, seam_scale);
+        //LOGLN("Size of mask image #" << i << ": " << img.cols << "  " << img.rows); //
         images[i] = img.clone();
     }
 
@@ -497,7 +499,7 @@ int main(int argc, char* argv[])
 
     sort(focals.begin(), focals.end());
     LOGLN("Focals size: " << focals.size());    //
-    LOGLN(" focals: " << focals[0] << "\t" << focals[1] << "\t" << focals[2] << "\n");  //
+    LOGLN(" focals: " << focals[0] << "  " << focals[1] << "  " << focals[2] << "\n");  //
     
 
  
@@ -534,6 +536,7 @@ int main(int argc, char* argv[])
     for (int i = 0; i < num_images; ++i)
     {
         masks[i].create(images[i].size(), CV_8U);
+        LOGLN("Size of mask image #" << i << ": " << images[i].cols << "  " << images[i].rows); //
         masks[i].setTo(Scalar::all(255));
     }
 

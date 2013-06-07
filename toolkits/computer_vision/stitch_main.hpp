@@ -382,7 +382,7 @@ void set_scales(engine_type::icontext_type& context, ImgArea& largestimg)
                
 
 /////////////////////////////////////////////////////////////////////////
-// Function to extract features in parallel
+// Function to extract features in vertex parallel
 void compute_features(graph_type::vertex_type& vertex)
 {
     // Get vertex data
@@ -418,8 +418,35 @@ void compute_features(graph_type::vertex_type& vertex)
     finder.collectGarbage();
    
     if (opts.verbose > 0)
+    {
         logstream(LOG_EMPH) << "Features in image #" << vertex.id() << ": " << vdata.features.keypoints.size() << "\n";
+	LOGLN("Size of feature image #" << img.cols << "  " << img.rows); //
+    }
    
+}
+
+/////////////////////////////////////////////////////////////////////////
+// Function to compute feature-matches in parallel on edges
+void match_features(graph_type::edge_type& edge)
+{
+    // Get edge data
+    edge_data &edata = edge.data();
+   
+    // Get vertex ids of two vertices involved
+    vertex_data &vdata1 = edge.source().data();
+    vertex_data &vdata2 = edge.target().data();
+   
+    // Match features
+    BestOf2NearestMatcher matcher;
+    matcher(vdata1.features, vdata2.features, edata.matchinfo);
+    matcher.collectGarbage();
+   
+    if (opts.verbose > 0)
+        logstream(LOG_EMPH) << "#Matches in Image Pair "
+        "(" << edge.source().id() << "," << edge.target().id() << ")"
+        << ": (" << edata.matchinfo.matches.size()
+        << "," << edata.matchinfo.num_inliers << ")"
+        << "\n";
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -457,6 +484,9 @@ void warp_images(graph_type::vertex_type& vertex)
     // Prepare images mask
     mask.create(img.size(), CV_8U);
     mask.setTo(Scalar::all(255));
+
+    if (opts.verbose > 2)
+        LOGLN("Size of mask image #" << img.cols << "  " << img.rows); //
 
     // Warp images and their masks
     Ptr<WarperCreator> warper_creator;
@@ -600,31 +630,6 @@ void composite_images(graph_type::vertex_type& vertex)
     mask_warped = seam_mask & masks_warped;
 
 }
-
-/////////////////////////////////////////////////////////////////////////
-// Function to compute feature-matches in parallel on edges
-void match_features(graph_type::edge_type& edge)
-{
-    // Get edge data
-    edge_data &edata = edge.data();
-   
-    // Get vertex ids of two vertices involved
-    vertex_data &vdata1 = edge.source().data();
-    vertex_data &vdata2 = edge.target().data();
-   
-    // Match features
-    BestOf2NearestMatcher matcher;
-    matcher(vdata1.features, vdata2.features, edata.matchinfo);
-    matcher.collectGarbage();
-   
-    if (opts.verbose > 0)
-        logstream(LOG_EMPH) << "#Matches in Image Pair "
-        "(" << edge.source().id() << "," << edge.target().id() << ")"
-        << ": (" << edata.matchinfo.matches.size()
-        << "," << edata.matchinfo.num_inliers << ")"
-        << "\n";
-}
-
 
 /////////////////////////////////////////////////////////////////////////
 // Function to compute feature-matches in parallel on edges
