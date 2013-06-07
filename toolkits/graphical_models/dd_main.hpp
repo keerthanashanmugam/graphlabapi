@@ -206,4 +206,14 @@ void loadUAIfile(graphlab::distributed_control& dc, graph_type& graph, string gr
     dc.barrier();
 } // end of loading UAI file
 
+void compute_degree(graph_type::vertex_type& vertex)
+{  vertex.data().degree = vertex.num_out_edges() + vertex.num_in_edges();
+   //cout<<vertex.data().degree<<endl;
+}
+
+void dist_unary_potentials(graph_type::edge_type& edge)
+{ vertex_data& vdata = (edge.source().data().nvars == 1)?edge.source().data():edge.target().data();
+  edge.data().potentials = vdata.potentials/vdata.degree;
+}
+
 #endif

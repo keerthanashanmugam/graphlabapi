@@ -30,6 +30,7 @@
  * algorithm. 
  */
 
+#include <fstream>
 #include <graphlab/util/stl_util.hpp>
 #include <graphlab.hpp>
 #include "eigen_serialization.hpp"
@@ -730,6 +731,10 @@ dc.cout() << "Finalizing graph." << std::endl;
 		gzip_output, save_edges, save_vertices, threads_per_machine);
     graph.save(predictions + ".bias.V", linear_model_saver_bias_V(),
 		gzip_output, save_edges, save_vertices, threads_per_machine);
+    std::ofstream global_mean_out;
+    global_mean_out.open ((predictions + ".global_mean").c_str());
+    global_mean_out << biassgd_vertex_program::GLOBAL_MEAN;
+    global_mean_out.close(); 
       
   }
              
