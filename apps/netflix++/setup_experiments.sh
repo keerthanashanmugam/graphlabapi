@@ -1,19 +1,20 @@
-home="/Users/haijieg"
-glhome="/Users/haijieg/graphlab/graphlab2.2"
-graph="$home/data/netflix/small/splits"
-mvname="$home/data/netflix/meta/moviename_escaped.txt"
-genre="$home/data/netflix/small/feat_netflix_genre.csv"
-topics="$home/data/netflix/small/feat_netflix_topic.csv"
+home="/home/haijieg"
+glhome="$home/graphlab/graphlab2.2"
+graph="/data/netflix/features/splits"
+mvname="/data/netflix/meta/moviename_escaped.txt"
+genre="/data/netflix/features/feat_netflix_genre.csv"
+topics="/data/netflix/features/feat_netflix_topic.csv"
 bin="$glhome/release/apps/netflix++/netflix_main"
-np=4
+iter=30
 
 outdirbase="$glhome/apps/netflix++/output"
 
-# nlatent_list=( 5 10 20 50 100 )
-# iter_list=( 4 8 12 16 20 )
-nlatent_list=( 5 )
-iter_list=( 4 )
-lambda_list=( 0.01 )
+nlatent_list=( 5 10 )
+lambda_list=( 0.01 0.1 1 )
+use_bias=( 0 1 )
+use_feature_weights=( 0 1 )
+# use_feature_factor=( 0 1 )
+use_feature_factor=( 1 )
 
 if [ -d "$outdirbase" ]
 then
@@ -22,26 +23,48 @@ fi
 
 for NLATENT in "${nlatent_list[@]}"
 do
-  for ITER in "${iter_list[@]}"
+  for LAMBDA in "${lambda_list[@]}"
   do
-    for LAMBDA in "${lambda_list[@]}"
+    for USEBIAS in "${use_bias[@]}"
     do
-      outdir="$outdirbase/D=${NLATENT}_iter=${ITER}_lambda=${LAMBDA}";
-      mkdir -p "$outdir"
-      cmd="mpiexec -np $np $bin --matrix=$graph \
-        --D=$NLATENT \
-        --lambda=$LAMBDA \
-        --movielist=$mvname \
-        --use_bias=false \
-        --use_als=true \
-        --use_feature_weights=false \
-        --use_feature_latent=false \
-        --max_iter=$ITER \
-        --interactive=false \
-        --saveprefix="$outdir/result"
-        --testpercent=-1"
-      echo $cmd > "$outdir/run.sh"
-      chmod u+x "$outdir/run.sh"
+      for USEFW in "${use_feature_weights[@]}"
+      do
+        for USEFF in "${use_feature_factor[@]}"
+        do
+          outdir="$outdirbase/D=${NLATENT}_iter=${iter}_lambda=${LAMBDA}";
+          if [ "$USEBIAS" -gt "0" ] 
+          then
+            outdir=$outdir"_w0"
+          fi
+          if [ "$USEFW" -gt "0" ]
+          then
+            outdir=$outdir"_fw"
+          fi
+          if [ "$USEFF" -gt "0" ]
+          then
+            outdir=$outdir"_ff"
+          fi
+          mkdir -p "$outdir"
+          cmd="$bin --matrix=$graph \
+            --topic_feature=$topics \
+            --truncate=false \
+            --D=$NLATENT \
+            --lambda=$LAMBDA \
+            --lambda2=0.001 \
+            --movielist=$mvname \
+            --use_bias=$USEBIAS \
+            --use_local_bias=false \
+            --use_als=true \
+            --use_feature_weights=$USEFW \
+            --use_feature_latent=$USEFF \
+            --max_iter=$iter \
+            --interactive=false \
+            --saveprefix="$outdir/result"
+          --testpercent=-1 2>&1 | tee $outdir/out.0"
+          echo $cmd > "$outdir/run.sh"
+          chmod u+x "$outdir/run.sh"
+        done
+      done
     done
   done
 done

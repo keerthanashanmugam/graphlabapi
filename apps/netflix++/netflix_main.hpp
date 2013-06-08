@@ -2,6 +2,7 @@
 #define FEATURE_MF_HPP
 
 #include <Eigen/Dense>
+#include <Eigen/SparseCore>
 #include <graphlab/util/stl_util.hpp>
 #include "eigen_serialization.hpp"
 
@@ -22,6 +23,7 @@ int MAX_VAL = 5, MIN_VAL = 1;
 size_t NTRAIN, NTEST;
 double TRAIN_RMSE, TEST_RMSE;
 bool USE_BIAS = true;
+bool USE_LOCAL_BIAS = true;
 bool USE_BIAS_LATENT = true;
 bool TRUNCATE = true;
 bool USE_FEATURE_LATENT = false;
@@ -35,6 +37,7 @@ std::string saveprefix="result";
  * mathematical vectors.
  */
 typedef Eigen::VectorXd vec_type;
+typedef Eigen::SparseVector<double> sparse_vec_type;
 
 /**
  * \brief We use the eigen library's matrix type to represent
@@ -79,7 +82,7 @@ struct vertex_data {
    * \brief Simple default constructor which randomizes the vertex
    *  data
    */
-  vertex_data() : bias(0), fcache(0), nupdates(0), residual(1) { randomize(); }
+  vertex_data() : bias(0), fcache(0), nupdates(0), residual(0) { randomize(); }
 
   /** \brief Randomizes the latent factor */
   void randomize() { 
@@ -97,6 +100,19 @@ struct vertex_data {
   void load(iarchive& arc) {
     arc >> bias >> fcache >> nupdates >> residual >> factor
         >> xfactor >> features;
+  }
+
+  std::string str() const {
+    std::stringstream ss; 
+    ss << bias  << "\t" << fcache << "\t"; 
+    for (size_t i = 0; i < factor.size(); ++i) {
+      ss << factor[i] << "\t";
+    }
+    for (size_t i = 0; i < xfactor.size(); ++i) {
+      ss << xfactor[i] << "\t";
+    }
+    ss << "\n";
+    return ss.str();
   }
 }; // end of vertex data
 
@@ -162,7 +178,7 @@ struct feature_table_type {
 
   boost::hash<std::string> hash;
 
-  void add_feature(const std::string& name) {
+  void add_feature_if_not_exist(const std::string& name) {
     size_t key = hash(name);
     if (!key_lookup.count(key)) {
       key_lookup[key] = keys.size();
@@ -186,27 +202,42 @@ struct feature_table_type {
     return names.size();
   }
 
-  void print_name() {
+  template<typename OutputStream>
+  void print_name(OutputStream& ostream) {
     for (size_t i = 0; i < names.size(); ++i) {
-      std::cout<< names[i];
+      ostream<< names[i];
       if (i < names.size()-1) {
-        std::cout << "\t";
+        ostream << "\t";
       }
     }
-    std::cout << std::endl;
+    ostream << std::endl;
   }
 
-  void save(std::string& fname) {
-    std::ofstream out;
-    out.open(fname.c_str());
+  template<typename OutputStream>
+  void save(OutputStream& out) {
+    for (size_t i = 0; i < names.size(); ++i) {
+      out << "\"" << names[i] << "\""; 
+      if (i == names.size()-1) {
+        out << "\n";
+      } else {
+        out << "\t";
+      }
+    }
+
+    for (size_t i = 0; i < weights.size(); ++i) {
+      out << weights[i];
+      if (i == weights.size()-1) {
+        out << "\n";
+      } else {
+        out << "\t";
+      }
+    }
     for (size_t i = 0; i < keys.size(); ++i) {
-      out << names[i] << "," << weights[i]; 
-      for (size_t j = 0; i < latent[i].size(); ++j) {
-        out << "," << latent[i][j];
+      for (size_t j = 0; j < latent[i].size(); ++j) {
+        out << latent[i][j] << "\t";
       }
       out << "\n";
     }
-    out.close();
   }
 };
 

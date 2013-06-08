@@ -531,7 +531,6 @@ namespace graphlab {
      * \internal
      * \brief Returns a list of out edges of the vertex with the given id. */
     edge_list_type out_edges(lvid_type v) {
-
       csr_type::iterator base_begin = _csr_storage.begin(v);
       csr_type::iterator base_end = _csr_storage.end(v);
 

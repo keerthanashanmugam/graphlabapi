@@ -27,8 +27,11 @@ inline bool graph_loader(graph_type& graph,
 
   // Determine the role of the data
   edge_data::data_role_type role = edge_data::TRAIN;
-  if(boost::ends_with(filename,".validate")) role = edge_data::VALIDATE;
-  else if(boost::ends_with(filename, ".predict")) role = edge_data::PREDICT;
+  if (boost::ends_with(filename,".validate")) {
+    role = edge_data::VALIDATE;
+  } else if(boost::ends_with(filename, ".predict")) {
+    role = edge_data::PREDICT;
+  }
   // Parse the line
   graph_type::vertex_id_type source_id(-1), target_id(-1);
   float obs(0);
@@ -45,7 +48,6 @@ inline bool graph_loader(graph_type& graph,
        ascii::space);
 
   if(!success) return false;
-
 
   // map target id into a separate number space
   target_id = movieid2vid(target_id);
@@ -95,14 +97,13 @@ inline bool genre_feature_loader(graph_type& graph,
 
   for (size_t i = 0; i < genres.size(); ++i) {
     std::string name = genres[i];
-    feature_table.add_feature(name);
+    feature_table.add_feature_if_not_exist(name);
     vdata.features[feature_table.get_key(name)] = 1;
     if (id == 1) {
       std::cout << name << "\t" << feature_table.get_key(name) << "\t" 
                 << std::endl;
     }
   }
-
   // Create an edge and add it to the graph
   graph.add_vertex(id, vdata);
   return true; // successful load
@@ -143,7 +144,7 @@ inline bool topic_feature_loader(graph_type& graph,
 
   for (size_t i = 0; i < topics.size(); ++i) {
     std::string name = std::string("topic")+boost::lexical_cast<std::string>(i);
-    feature_table.add_feature(name);
+    feature_table.add_feature_if_not_exist(name);
     vdata.features[feature_table.get_key(name)] += topics[i];
     if (id == 1) {
       std::cout << name << "\t" << feature_table.get_key(name) << "\t" 
@@ -166,10 +167,7 @@ struct linear_model_saver_U {
      */
   std::string save_vertex(const vertex_type& vertex) const {
     if (vertex.num_out_edges() > 0){
-      std::string ret = boost::lexical_cast<std::string>(vertex.id()) + " ";
-      for (uint i=0; i< vertex_data::NLATENT; i++)
-        ret += boost::lexical_cast<std::string>(vertex.data().factor[i]) + " ";
-      ret += "\n";
+      std::string ret = boost::lexical_cast<std::string>(vertex.id()) + "\t" + vertex.data().str();
       return ret;
     }
     else return "";
@@ -187,10 +185,7 @@ struct linear_model_saver_V {
      */
   std::string save_vertex(const vertex_type& vertex) const {
     if (vertex.num_out_edges() == 0){
-      std::string ret = boost::lexical_cast<std::string>(vid2movieid(vertex.id())) + " ";
-      for (uint i=0; i< vertex_data::NLATENT; i++)
-        ret += boost::lexical_cast<std::string>(vertex.data().factor[i]) + " ";
-      ret += "\n";
+      std::string ret = boost::lexical_cast<std::string>(vid2movieid(vertex.id())) + "\t" + vertex.data().str();
       return ret;
     }
     else return "";
@@ -219,11 +214,13 @@ struct prediction_saver {
   }
 }; // end of prediction_saver
 
-void save_model(distributed_control& dc, graph_type& graph) {
+void save_model(distributed_control& dc, graph_type& graph, size_t iter) {
   std::string prefix = saveprefix 
       + "_D=" + boost::lexical_cast<std::string>(vertex_data::NLATENT)
-      + "_iter=" + boost::lexical_cast<std::string>(MAX_ITER)
-      + "_lambda=" + boost::lexical_cast<std::string>(LAMBDA);
+      + "_iter=" + boost::lexical_cast<std::string>(iter)
+      + "_lambda=" + (boost::format("%4.3f") % LAMBDA).str();
+  if (USE_FEATURE_LATENT | USE_FEATURE_WEIGHTS)
+    prefix += "_lambda2=" + (boost::format("%4.3f") % LAMBDA2).str();
 
   // Save model parameters 
   dc.cout() << "Save model to " << prefix << "..." << std::endl;
@@ -232,13 +229,37 @@ void save_model(distributed_control& dc, graph_type& graph) {
   graph.save(prefix + ".movie", linear_model_saver_V(),
              false, true, false);
 
-  // Save hyper parameters, and global results
+  // Save feature parameter, hyper parameters, and global results
   if (dc.procid() == 0) {
+    if (USE_FEATURE_LATENT | USE_FEATURE_WEIGHTS) { 
+      std::string outfile = prefix + ".feature";
+      if (boost::starts_with(prefix, "hdfs://")) {
+        typedef graphlab::hdfs::fstream base_fstream_type;
+        if(!hdfs::has_hadoop()) {
+          logstream(LOG_FATAL)
+              << "\n\tAttempting to save a graph to HDFS but GraphLab"
+              << "\n\twas built without HDFS."
+              << std::endl;
+        }
+        hdfs& hdfs = hdfs::get_hdfs();
+        // open the stream
+        base_fstream_type fout(hdfs, outfile, true);
+        feature_table.save(fout);
+        fout.close();
+      } else {
+        std::ofstream fout;
+        fout.open(outfile.c_str());
+        feature_table.save(fout);
+        fout.close();
+      }
+    }
+
     std::string outfile = prefix + ".info";
     std::stringstream ss;
     ss << "\"NLATENT\": " << vertex_data::NLATENT << "\n"
-       << "\"iter\": " << MAX_ITER << "\n"
+       << "\"iter\": " << iter << "\n"
        << "\"lambda\": " << LAMBDA << "\n" 
+       << "\"lambda2\": " << LAMBDA2 << "\n" 
        << "\"NTRAIN\": "<< NTRAIN << "\n"
        << "\"NTEST\": "<< NTEST << "\n"
        << "\"Training RMSE\": " << TRAIN_RMSE << "\n"
