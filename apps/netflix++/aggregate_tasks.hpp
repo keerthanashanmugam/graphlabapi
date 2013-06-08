@@ -35,7 +35,7 @@ double extract_residual(const graph_type::vertex_type& vertex) {
   return vertex.data().residual;
 }
 double extract_l2_norm(const graph_type::vertex_type& vertex) {
-  return vertex.data().factor.norm() + vertex.data().xfactor.norm();
+  return vertex.data().factor.norm();
 }
 
 //////////////////////////// Recommendation Aggregator /////////////////////////////
