@@ -1,0 +1,35 @@
+types {
+  vertextype double
+  edgetype double
+}
+
+
+def update() {
+  //get a local copy of the vertex data
+  double prev = get_vertex_data()
+
+  //get a sum of the neighbors' values
+  //uses vertex_reduce defined below
+  double neighbors = reduce_neighbors(IN_EDGES)
+
+  //calculate updated value
+  double curr = 0.85*neighbors + 0.15
+
+  //modify our data
+  set_vertex_data(curr)
+
+  //calculate change
+  double last_change = curr - prev
+  if (last_change < 0) {
+    last_change = -1 * last_change
+  }
+
+  //signal neighbors
+  if (last_change > 0.01) {
+    signal_neighbors(OUT_EDGES)
+  }
+}
+
+def vertex_reduce(a:double,b:double) {
+  a = a + b
+}
