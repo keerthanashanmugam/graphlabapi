@@ -1,25 +1,25 @@
 types {
-  vertextype float
-  edgetype float
+  vertextype double
+  edgetype double
 }
 
 
 def update() {
   //get a local copy of the vertex data
-  float prev = get_vertex_data()
+  double prev = get_vertex_data()
 
   //get a sum of the neighbors' values
   //uses vertex_reduce defined below
-  float neighbors = reduce_neighbors(IN_EDGES)
+  double neighbors = reduce_neighbors(IN_EDGES)
 
   //calculate updated value
-  float curr = 0.85*neighbors + 0.15
+  double curr = 0.85*neighbors + 0.15
 
   //modify our data
   set_vertex_data(curr)
 
   //calculate change
-  float last_change = curr - prev
+  double last_change = curr - prev
   if (last_change < 0) {
     last_change = -1 * last_change
   }
@@ -30,6 +30,6 @@ def update() {
   }
 }
 
-def vertex_reduce(a:vertextype,b:vertextype) {
-  a += b
+def vertex_reduce(a:double,b:double) {
+  a = a + b
 }
