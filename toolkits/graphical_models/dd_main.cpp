@@ -32,6 +32,7 @@
 
 #include "dd_main.hpp"
 #include "dd_grlab.hpp"
+#include "ad3_qp.hpp"
 
 Options opts;
 
@@ -71,6 +72,9 @@ int main(int argc, char** argv)
                          "Verbosity of Printing: 0 (default, no printing) or 1 (lots).");
     clopts.attach_option("engine", opts.exec_type,
                          "The type of engine to use {async, sync}.");
+    clopts.attach_option("algorithm", opts.algorithm, 
+                         "specify type of algorithm, 0 for dd_symmetric, 1 for dd_projected, 2 for admm");
+    clopts.add_positional("algorithm");
     
     if(!clopts.parse(argc, argv)) 
     {
@@ -111,10 +115,14 @@ int main(int argc, char** argv)
     graph.transform_edges(dist_unary_potentials);
     
     // Define the engine.
+    
     //typedef graphlab::omni_engine<dd_vertex_program_symmetric> engine_type;
-    typedef graphlab::omni_engine<dd_vertex_program_projected> engine_type;
-
+     typedef graphlab::omni_engine<dd_vertex_program_projected> engine_type;
+     //typedef graphlab::omni_engine<admm_vertex_program_general> engine_type;
     // Instantiate the engine object
+    
+  
+  
     engine_type engine(dc, graph, opts.exec_type, clopts);
     engine.signal_all();
     graphlab::timer timer;
@@ -123,10 +131,11 @@ int main(int argc, char** argv)
     
      engine.add_vertex_aggregator<objective>("pd_obj",sum, print_obj); 
      engine.aggregate_periodic("pd_obj",0.0001);
-
+     
     // The main command. Run graphlab
     engine.start();  
-   // engine.aggregate_now("pd_obj");
+    
+    engine.aggregate_now("pd_obj");
     
     const double runtime = timer.current_time();    
     dc.cout() 
@@ -136,7 +145,7 @@ int main(int argc, char** argv)
     << "Updates executed: " << engine.num_updates() << std::endl
     << "Update Rate (updates/second): " 
     << engine.num_updates() / runtime << std::endl;
-    
+    graph.save("output",graph_writer(),false, true, false); 
     if ( opts.history_file.size() < 4 || opts.history_file.find(".txt",opts.history_file.size()-4) == std::string::npos)
     {opts.history_file.append(".txt");} 
     char *filename = (char*)opts.history_file.c_str();

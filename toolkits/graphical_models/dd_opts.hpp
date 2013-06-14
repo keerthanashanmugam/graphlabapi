@@ -54,7 +54,8 @@ struct Options
     double pdgapthres;
     int maxiter;
     
-    int stepsize_type;    
+    int stepsize_type;  
+    int algorithm;  
     
     
     // Default values
@@ -64,6 +65,7 @@ struct Options
     history_file("\0"),
     verbose(0), stepsize_type(1),
     dualimprovthres(1e-5), pdgapthres(1e-1), 
+    algorithm(0),
     maxiter(10000)
     {}
 };

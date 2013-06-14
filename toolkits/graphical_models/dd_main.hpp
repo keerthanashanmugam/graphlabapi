@@ -161,6 +161,8 @@ void loadUAIfile(graphlab::distributed_control& dc, graph_type& graph, string gr
         
         // Read factor potentials
         vdata.potentials.resize(cardprod);
+        vdata.beliefs.resize(cardprod);
+        vdata.factor_beliefs.resize(cardprod);
         for (int k = 0; k != cardprod; ++k) 
         {
             in >> potential_value;
@@ -215,5 +217,15 @@ void dist_unary_potentials(graph_type::edge_type& edge)
 { vertex_data& vdata = (edge.source().data().nvars == 1)?edge.source().data():edge.target().data();
   edge.data().potentials = vdata.potentials/vdata.degree;
 }
+
+class graph_writer {
+public:
+std::string save_vertex(graph_type::vertex_type v) {
+std::stringstream strm;
+strm << v.id() << "\t" << v.data().best_configuration << "\n";
+return strm.str();
+ }
+std::string save_edge(graph_type::edge_type e) { return ""; }
+ };
 
 #endif
