@@ -101,18 +101,25 @@ public:
       } else {
 
         ASSERT_EQ(outedges.size(), 2);
-        size_t arr_out[] = {5,2};
+        std::set<int> arr_out; 
+        arr_out.insert(5); arr_out.insert(2);
         for (size_t j = 0; j < 2; ++j) {
           edge_data data = (outedges[j]).data();
           ASSERT_EQ(data.from, 3);
-          ASSERT_EQ(data.to, arr_out[j]);
+          ASSERT_TRUE(arr_out.count(data.to) > 0);
+          arr_out.erase(data.to);
         }
 
-        size_t arr_in[] = {5,4,2,1};
+        std::set<int> arr_in;
+        arr_in.insert(4);
+        arr_in.insert(2);
+        arr_in.insert(5);
+        arr_in.insert(1);
         ASSERT_EQ(inedges.size(), 4);
         for (size_t j = 0; j < 4; ++j) {
           edge_data data = (inedges[j]).data();
-          ASSERT_EQ(data.from, arr_in[j]);
+          ASSERT_TRUE(arr_in.count(data.from)>0);
+          arr_in.erase(data.from);
           ASSERT_EQ(data.to, 3);
         }
       }

@@ -26,7 +26,7 @@ using namespace graphlab;
 void update_predictions(distributed_control& dc,
                         engine_type& engine, graph_type& graph, bool truncate) {
     //  Update cached prediction on edges
-    engine.parfor_all_local_edges(boost::bind(compute_prediction, _1, _2, truncate)); engine.wait();
+    engine.parfor_all_local_edges(boost::bind(compute_prediction_fun, _1, _2, truncate)); engine.wait();
     error_aggregator errors = graph.map_reduce_edges<error_aggregator>(extract_l2_error);
     TRAIN_RMSE  =  sqrt(errors.train/errors.ntrain);
     TEST_RMSE =  sqrt(errors.test/errors.ntest);
@@ -36,14 +36,86 @@ void update_predictions(distributed_control& dc,
     }
 }
 
-void run_iter(distributed_control& dc, engine_type& engine,
+double run_iter(distributed_control& dc, engine_type& engine,
               graph_type& graph, int iter) {
     vertex_set user_set = graph.select(is_user);
     vertex_set movie_set = graph.complete_set() - user_set; 
 
     graphlab::timer timer;
     timer.start();
+
+    engine.parfor_all_local_vertices(init_vertex); engine.wait();
+
     double residual = 0;
+
+    if (USE_BIAS) {
+      /**************************************************************************/
+      /*                                                                        */
+      /*                          compute global bias                           */
+      /*                                                                        */
+      /**************************************************************************/
+      logstream(LOG_EMPH) << "Compute w0" << std::endl;
+      double bias = graph.map_reduce_edges<double>(compute_bias) / NTRAIN;
+      // l1 change in w0
+      double delta =  fabs(bias - feature_table.w0);
+      feature_table.w0 = bias; 
+      logstream(LOG_EMPH) << "w0 = " << feature_table.w0 << std::endl;
+      logstream(LOG_EMPH) << "delta(w0) = " << delta << std::endl;
+
+      residual += delta;
+      // update cached prediction on edge
+      update_predictions(dc, engine, graph, TRUNCATE);
+    }
+
+    if (USE_LOCAL_BIAS) {
+      /**************************************************************************/
+      /*                                                                        */
+      /*                         compute local bias                             */
+      /*                                                                        */
+      /**************************************************************************/
+      logstream(LOG_EMPH) << "Compute wu, wv" << std::endl;
+      engine.parfor_all_local_vertices(compute_local_bias); engine.wait();
+      double delta = graph.map_reduce_vertices<double>(extract_residual) / graph.num_vertices(); 
+      logstream(LOG_EMPH) << "delta(wu, wv) = " << delta << std::endl;
+      residual += delta;
+      update_predictions(dc, engine, graph, TRUNCATE);
+    } // end of use bias
+
+    if (USE_FEATURE_WEIGHTS) {
+      /**************************************************************************/
+      /*                                                                        */
+      /*                        compute feature weights                         */
+      /*                                                                        */
+      /**************************************************************************/
+      logstream(LOG_EMPH) << "Compute wx..." << std::endl;
+      regression_map_type sum = graph.fold_reduce_edges<regression_map_type>(feature_regression);
+      // regression_map_type sum = graph.map_reduce_edges<regression_map_type>(regression_edge_map);
+      logstream(LOG_INFO) << "Finish gather" << std::endl;
+      mat_type XtX = sum.XtX;
+      vec_type Xy = sum.Xy;
+      if (sum.Xy.size() > 0) { 
+        double delta = 0;
+        for(int i = 0; i < XtX.rows(); ++i)
+          XtX(i,i) += LAMBDA2;
+        // Update weights 
+        vec_type w = XtX.selfadjointView<Eigen::Upper>().ldlt().solve(Xy);
+        for (size_t i= 0; i < feature_table.size(); ++i) {
+          delta += fabs(w[i] - feature_table.weights[i]);
+          feature_table.weights[i] = w[i];
+          logstream(LOG_INFO) << feature_table.names[i] << ": "
+                              << feature_table.weights[i] << std::endl;
+        }
+
+        logstream(LOG_INFO) << "Finish compute" << std::endl;
+        logstream(LOG_EMPH) << "norm(wx) = " << w.norm() << std::endl;
+        logstream(LOG_EMPH) << "delta(wx) = " << delta/feature_table.size() << std::endl;
+        residual += delta;
+        engine.parfor_all_local_vertices(init_vertex); engine.wait();
+        logstream(LOG_INFO) << "Finish scatter" << std::endl;
+        update_predictions(dc, engine, graph, TRUNCATE);
+      }
+    } // end of update feature weights
+
     if (USE_BIAS_LATENT) {
       /**************************************************************************/
       /*                                                                        */
@@ -54,60 +126,14 @@ void run_iter(distributed_control& dc, engine_type& engine,
       engine.set_vertex_program(boost::bind(als_update_function, _1,_2,_3));
       engine.signal_vset(user_set); engine.wait();
       engine.signal_vset(movie_set); engine.wait();
+      double delta = graph.map_reduce_vertices<double>(extract_residual) / graph.num_vertices(); 
+      logstream(LOG_EMPH) << "delta(u, v) = " << delta << std::endl;
+      residual += delta;
+      double l2norm = graph.map_reduce_vertices<double>(extract_l2_norm);
+      logstream(LOG_EMPH) << "Averge squared norm of latent factors: " << l2norm/graph.num_vertices() << std::endl;
       //  Update cached prediction on edges
       update_predictions(dc, engine, graph, TRUNCATE);
     }
-
-    if (USE_BIAS) {
-      /**************************************************************************/
-      /*                                                                        */
-      /*                          compute global bias                           */
-      /*                                                                        */
-      /**************************************************************************/
-      logstream(LOG_EMPH) << "Compute w0" << std::endl;
-      double bias = graph.map_reduce_edges<double>(compute_bias);
-      feature_table.w0 = bias / NTRAIN;
-      logstream(LOG_EMPH) << "w0 = " << feature_table.w0 << std::endl;
-      update_predictions(dc, engine, graph, TRUNCATE);
-
-      /**************************************************************************/
-      /*                                                                        */
-      /*                         compute local bias                             */
-      /*                                                                        */
-      /**************************************************************************/
-      logstream(LOG_EMPH) << "Compute wu, wv" << std::endl;
-      engine.parfor_all_local_vertices(compute_vertex_bias); engine.wait();
-      update_predictions(dc, engine, graph, TRUNCATE);
-    } // end of use bias
-
-
-    if (USE_FEATURE_WEIGHTS) {
-      /**************************************************************************/
-      /*                                                                        */
-      /*                        compute feature weights                         */
-      /*                                                                        */
-      /**************************************************************************/
-      logstream(LOG_EMPH) << "Compute w1,w2..." << std::endl;
-      als_gather_type sum = graph.map_reduce_edges<als_gather_type>(regression_edge_map);
-      logstream(LOG_EMPH) << "Finish gather" << std::endl;
-      mat_type XtX = sum.XtX;
-      vec_type Xy = sum.Xy;
-      if (sum.Xy.size() > 0) { 
-        for(int i = 0; i < XtX.rows(); ++i)
-          XtX(i,i) += LAMBDA2;
-        // Update weights 
-        vec_type w = XtX.selfadjointView<Eigen::Upper>().ldlt().solve(Xy);
-        for (size_t i= 0; i < feature_table.size(); ++i) {
-          feature_table.weights[i] = w[i];
-          logstream(LOG_EMPH) << feature_table.names[i] << ": "
-                              << feature_table.weights[i] << std::endl;
-        }
-        logstream(LOG_EMPH) << "Finish compute" << std::endl;
-        engine.parfor_all_local_vertices(init_vertex); engine.wait();
-        logstream(LOG_EMPH) << "Finish scatter" << std::endl;
-        update_predictions(dc, engine, graph, TRUNCATE);
-      }
-    } // end of update feature weights
 
     if (USE_FEATURE_LATENT) {
       /**************************************************************************/
@@ -118,6 +144,8 @@ void run_iter(distributed_control& dc, engine_type& engine,
       typedef boost::unordered_map<size_t, vec_type>::value_type kv_type;
 
       // coordinate descent for each feature
+      double delta = 0;
+      double l2 = 0;
       for (size_t i = 0; i < feature_table.size(); ++i) {
         logstream(LOG_EMPH) << "Update global feature "
                             << feature_table.names[i] << "\t"
@@ -128,7 +156,8 @@ void run_iter(distributed_control& dc, engine_type& engine,
         ASSERT_TRUE(fid != 0);
 
         // Gather sufficient statistics on vertices
-        als_gather_type sum = graph.map_reduce_edges<als_gather_type> (boost::bind(als_map_edge, _1, fid));
+        regression_map_type sum = graph.parallel_fold_edges<regression_map_type> 
+            (boost::bind(feature_latent_factor_regression, _1, _2, fid));
         mat_type XtX = sum.XtX;
         vec_type Xy = sum.Xy;
         if (sum.Xy.size() > 0) { 
@@ -138,7 +167,9 @@ void run_iter(distributed_control& dc, engine_type& engine,
 
           // Update coordinate
           feature_table.latent[i] = XtX.selfadjointView<Eigen::Upper>().ldlt().solve(Xy);
-          residual += (feature_table.latent[i]- old).cwiseAbs().sum() / XtX.rows();
+          // Compute l1 change, and  norm
+          delta += (feature_table.latent[i]- old).cwiseAbs().sum() / XtX.rows();
+          l2 += feature_table.latent[i].norm();
           logstream(LOG_EMPH) << "feature " <<  feature_table.names[i] << "\n" 
                               << "norm = " << feature_table.latent[i].norm() << std::endl;
           //  Update cached prediction on vertices
@@ -147,10 +178,14 @@ void run_iter(distributed_control& dc, engine_type& engine,
           update_predictions(dc, engine, graph, TRUNCATE);
         } // end of update
       } // end of foreach feature
-    } // end of update feature feature latent 
 
-    residual += graph.map_reduce_vertices<double>(extract_residual); 
-    dc.cout() << "ALS residual: " << residual << std::endl;
+      delta /= feature_table.size();
+      residual += delta;
+
+      logstream(LOG_EMPH) << "Done updating feature latent factors" << std::endl; 
+      logstream(LOG_EMPH) << "delta(latent(x)) = " << delta << std::endl;
+      logstream(LOG_EMPH) << "Average l2 norm of feature latent factors = " << l2/feature_table.size() << std::endl;
+    } // end of update feature feature latent 
 
     const double runtime = timer.current_time();
     dc.cout() << "Complete iteration: " << iter << std::endl;
@@ -163,14 +198,14 @@ void run_iter(distributed_control& dc, engine_type& engine,
               << engine.num_updates() / runtime << std::endl;
 
     // Compute the final training error -----------------------------------------
-    double l2norm = graph.map_reduce_vertices<double>(extract_l2_norm);
-    dc.cout() << "Factor squared norm: " << l2norm/graph.num_vertices() << std::endl;
+    dc.cout() << "Model Residual (L1): " << residual << std::endl;
     dc.cout() << "Training RMSE: " << TRAIN_RMSE << std::endl;
     dc.cout() << "Test RMSE: " << TEST_RMSE << std::endl;
+    return residual;
 }
 
 void pause(distributed_control& dc, engine_type& engine, graph_type& graph,
-           int iter) {
+           size_t iter) {
   while (1) {
     int uid;
     if (dc.procid() == 0) {
@@ -195,7 +230,7 @@ void pause(distributed_control& dc, engine_type& engine, graph_type& graph,
       // dc.cout() << "Finish collecting explanation in " << timer.current_time() << " secs" << std::endl;
       // continue;
     } else if (uid == -3) {
-      save_model(dc, graph);
+      save_model(dc, graph, iter);
       continue;
     } else if (uid == -4) {
       return;
@@ -228,6 +263,7 @@ void pause(distributed_control& dc, engine_type& engine, graph_type& graph,
     for (size_t i = 0; i < topk_rec.size(); ++i) {
       get_explanation(dc, graph, topk_rec[i].first, training_set);
     }
+    ++iter;
   }
 }
 
@@ -263,6 +299,7 @@ int main(int argc, char** argv) {
   clopts.attach_option("use_feature_latent", USE_FEATURE_LATENT, "Add feature latent vector to the model");
   clopts.attach_option("use_als", USE_BIAS_LATENT, "Add feature latent vector to the model");
   clopts.attach_option("use_bias", USE_BIAS, "Add global bias and user/movie bias to the model");
+  clopts.attach_option("use_local_bias", USE_LOCAL_BIAS, "Add local bias and user/movie bias to the model");
   clopts.attach_option("use_feature_weights", USE_FEATURE_WEIGHTS, "Add numerical feature weights to the model");
   clopts.attach_option("minval", MIN_VAL, "MIN value for the prediction");
   clopts.attach_option("maxval", MAX_VAL, "MAX value for the prediction");
@@ -299,7 +336,7 @@ int main(int argc, char** argv) {
       graph.load(genre_feature_dir, genre_feature_loader);
   }
   logstream(LOG_EMPH) << "Number of features =  " << feature_table.size() << std::endl;
-  feature_table.print_name();
+  feature_table.print_name(std::cout);
 
   if (!movielist_dir.empty()) {
     dc.cout() << "Loading movie names from " << movielist_dir << std::endl; 
@@ -352,12 +389,18 @@ int main(int argc, char** argv) {
         << float(graph.num_local_edges())/graph.num_edges()
         << std::endl;
 
+  NTRAIN = graph.map_reduce_edges<int>(init_edge_hold_out); 
+  NTEST = NEDGES - NTRAIN;
+
+  logstream(LOG_EMPH) << "Number training edges: " << NTRAIN << std::endl;
+  logstream(LOG_EMPH) << "Number testing edges: " << NTEST << std::endl;
+
   dc.cout() << "Creating engine" << std::endl;
   engine_type engine(dc, graph, clopts);
 
   engine.register_map_reduce(ALS_MAP_REDUCE, // 0
                              als_map,
-                             als_sum);
+                             T_sum<als_gather_type>);
   engine.register_map_reduce(BIAS_MAP_REDUCE, // 2
                              bias_map,
                              pair_sum<double, size_t>);
@@ -367,21 +410,19 @@ int main(int argc, char** argv) {
   engine.parfor_all_local_vertices(init_vertex); 
   engine.wait();
 
-  NTRAIN = graph.map_reduce_edges<int>(init_edge_hold_out); 
-  NTEST = NEDGES - NTRAIN;
-
-  logstream(LOG_EMPH) << "Number training edges: " << NTRAIN << std::endl;
-  logstream(LOG_EMPH) << "Number testing edges: " << NTEST << std::endl;
 
   launch_custom_metric_server();
-  for (size_t iter = 0; iter < MAX_ITER; ++iter) {
-    run_iter(dc, engine, graph, iter);
+  size_t iter = 0;
+  for (iter = 0; iter < MAX_ITER; ++iter) {
+    double residual = run_iter(dc, engine, graph, iter);
+    if (residual < TOLERANCE)
+      break;
   }
 
   if (INTERACTIVE) {
-    pause(dc, engine, graph, MAX_ITER);
+    pause(dc, engine, graph, iter);
   } else {
-    save_model(dc, graph);
+    save_model(dc, graph, iter);
   }
 
   logstream(LOG_EMPH) << "Finish." << std::endl;

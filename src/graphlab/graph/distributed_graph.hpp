@@ -1044,7 +1044,6 @@ namespace graphlab {
           << "\n\tbefore calling graph.finalize()."
           << std::endl;
       }
-
       rpc.barrier();
       bool global_result_set = false;
       ReductionType global_result = ReductionType();
@@ -1057,7 +1056,8 @@ namespace graphlab {
 #ifdef _OPENMP
         #pragma omp for
 #endif
-        for (int i = 0; i < (int)local_graph.num_vertices(); ++i) {
+        for (int _i = 0; _i < (int)local_graph.num_vertices(); ++_i) {
+          size_t i = ((size_t)(_i) * 65537) % local_graph.num_vertices();
           if (vset.l_contains((lvid_type)i)) {
             if (edir == IN_EDGES || edir == ALL_EDGES) {
               foreach(const local_edge_type& e, l_vertex(i).in_edges()) {
@@ -1110,6 +1110,67 @@ namespace graphlab {
       rpc.all_reduce(wrapper);
       return wrapper.value;
    } // end of map_reduce_edges
+
+    template <typename ReductionType, typename FoldFunctionType>
+    ReductionType fold_reduce_edges (FoldFunctionType foldfunction,
+                                     const vertex_set& vset = complete_set(),
+                                     edge_dir_type edir = IN_EDGES) {
+      BOOST_CONCEPT_ASSERT((graphlab::Serializable<ReductionType>));
+      BOOST_CONCEPT_ASSERT((graphlab::OpPlusEq<ReductionType>));
+      if(!finalized) {
+        logstream(LOG_FATAL)
+          << "\n\tAttempting to run graph.map_reduce_vertices(...)"
+          << "\n\tbefore calling graph.finalize()."
+          << std::endl;
+      }
+      rpc.barrier();
+      bool global_result_set = false;
+      ReductionType global_result = ReductionType();
+#ifdef _OPENMP
+#pragma omp parallel
+#endif
+      {
+        ReductionType result = ReductionType();
+#ifdef _OPENMP
+        #pragma omp for
+#endif
+        for (int _i = 0; _i < (int)local_graph.num_vertices(); ++_i) {
+          size_t i = ((size_t)(_i) * 65537) % local_graph.num_vertices();
+          if (vset.l_contains((lvid_type)i)) {
+            if (edir == IN_EDGES || edir == ALL_EDGES) {
+              foreach(const local_edge_type& e, l_vertex(i).in_edges()) {
+                  edge_type edge(e);
+                  foldfunction(result, edge);
+              }
+            }
+            if (edir == OUT_EDGES || edir == ALL_EDGES) {
+              foreach(const local_edge_type& e, l_vertex(i).out_edges()) {
+                  edge_type edge(e);
+                  foldfunction(result, edge);
+              }
+            }
+          }
+        }
+#ifdef _OPENMP
+        #pragma omp critical
+#endif
+        {
+            if (!global_result_set) {
+              global_result = result;
+              global_result_set = true;
+            }
+            else {
+              global_result += result;
+            }
+        }
+      }
+
+      conditional_addition_wrapper<ReductionType>
+        wrapper(global_result, global_result_set);
+      rpc.all_reduce(wrapper);
+      return wrapper.value;
+   } // end of map_reduce_edges
+
 
     /**
      * \brief Performs a transformation operation on each vertex in the graph.

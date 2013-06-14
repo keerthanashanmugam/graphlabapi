@@ -45,6 +45,7 @@
 #include <boost/spirit/include/phoenix_operator.hpp>
 #include <boost/spirit/include/phoenix_stl.hpp>
 #include <boost/tokenizer.hpp>
+#include <boost/algorithm/string.hpp>
 
 #include <limits>
 #include <vector>
@@ -57,6 +58,7 @@
 
 size_t NUM_CLUSTERS = 0;
 bool IS_SPARSE = false;
+std::vector<double> weights;
 
 struct cluster {
   cluster(): count(0), changed(false) { }
@@ -120,7 +122,8 @@ double sqr_distance(const std::vector<double>& a,
   double total = 0;
   for (size_t i = 0;i < a.size(); ++i) {
     double d = a[i] - b[i];
-    total += d * d;
+    double w = weights.size() > 0 ? weights[i] : 1;
+    total += d * d * w;
   }
   return total;
 }
@@ -405,7 +408,7 @@ struct min_point_size_reducer: public graphlab::IS_POD_TYPE {
 void kmeans_pp_initialization(graph_type::vertex_type& v) {
   double d = sqr_distance(v.data().point,
                           CLUSTERS[KMEANS_INITIALIZATION].center);
-  if (v.data().best_distance > d) {
+  if (v.data().best_distance >= d) {
     v.data().best_distance = d;
     v.data().best_cluster = KMEANS_INITIALIZATION;
   }
@@ -414,7 +417,7 @@ void kmeans_pp_initialization(graph_type::vertex_type& v) {
 void kmeans_pp_initialization_sparse(graph_type::vertex_type& v) {
   double d = sqr_distance(v.data().point_sparse,
                           CLUSTERS[KMEANS_INITIALIZATION].center_sparse);
-  if (v.data().best_distance > d) {
+  if (v.data().best_distance >= d) {
     v.data().best_distance = d;
     v.data().best_cluster = KMEANS_INITIALIZATION;
   }
@@ -771,6 +774,7 @@ int main(int argc, char** argv) {
   std::string outcluster_file;
   std::string outdata_file;
   std::string edgedata_file;
+  std::string weight_string;
   size_t MAX_ITERATION = 0;
   bool use_id = false;
   clopts.attach_option("data", datafile,
@@ -801,6 +805,9 @@ int main(int argc, char** argv) {
                        "[reward]. This mode must be used with --id option.");
   clopts.attach_option("max-iteration", MAX_ITERATION,
                        "The max number of iterations");
+  clopts.attach_option("weights", weight_string,
+                       "comma separated weight for each feature");
+
 
   if(!clopts.parse(argc, argv)) return EXIT_FAILURE;
   if (datafile == "") {
@@ -820,6 +827,22 @@ int main(int argc, char** argv) {
 
   graphlab::mpi_tools::init(argc, argv);
   graphlab::distributed_control dc;
+
+  graphlab::timer mytimer;
+  mytimer.start();
+
+  if (weight_string != "") {
+	std::vector<std::string> splits;
+	boost::split(splits, weight_string, boost::is_any_of(", "));
+	dc.cout()<< "parse weight string: ";
+	for (size_t i = 0; i < splits.size(); ++i) {
+		double w = boost::lexical_cast<double>(splits[i]);
+		weights.push_back(w);
+		dc.cout() << w << "\t";
+	}
+	dc.cout() << "\n";
+  }
+
   // load graph
   graph_type graph(dc, clopts);
   NEXT_VID = (((graphlab::vertex_id_type)1 << 31) / dc.numprocs()) * dc.procid();
@@ -957,6 +980,7 @@ int main(int argc, char** argv) {
       for (size_t i = 0;i < NUM_CLUSTERS; ++i) {
         if(use_id)
           fout << i+1 << "\t";
+	fout << CLUSTERS[i].count << "\t";
         for (std::map<size_t, double>::iterator iter = CLUSTERS[i].center_sparse.begin();
              iter != CLUSTERS[i].center_sparse.end();++iter) {
           fout << (*iter).first << ":" << (*iter).second << " ";
@@ -967,6 +991,7 @@ int main(int argc, char** argv) {
       for (size_t i = 0;i < NUM_CLUSTERS; ++i) {
         if(use_id)
           fout << i+1 << "\t";
+	fout << CLUSTERS[i].count << "\t";
         for (size_t j = 0; j < CLUSTERS[i].center.size(); ++j) {
           fout << CLUSTERS[i].center[j] << " ";
         }
@@ -987,6 +1012,9 @@ int main(int argc, char** argv) {
     }
   }
 
+  if (dc.procid() == 0) {
+	  logstream(LOG_EMPH) << "Finished in " << mytimer.current_time() << " secs" << std::endl;
+  }
   graphlab::mpi_tools::finalize();
 }
 
