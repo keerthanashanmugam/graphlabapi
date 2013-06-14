@@ -539,7 +539,7 @@ namespace graphlab {
         source, destination, and data. Used for temporary storage. The
         data is transferred into CSR+CSC representation in
         Finalize. This will be cleared after finalized.*/
-    local_edge_buffer<VertexData, EdgeData> edge_buffer;
+    local_edge_buffer<EdgeData> edge_buffer;
 
     /** Mark whether the local_graph is finalized.  Graph finalization is a
         costly procedure but it can also dramatically improve

@@ -66,7 +66,7 @@
 
 namespace graphlab { 
 
-  template<typename VertexData, typename EdgeData>
+  template<typename VertexData, typename EdgeData, bool check_duplicate=false>
   class local_graph {
   public:
     
@@ -200,24 +200,20 @@ namespace graphlab {
     void finalize() {   
       if(finalized) return;
       graphlab::timer mytimer; mytimer.start();
-#ifdef DEBUG_GRAPH
       logstream(LOG_DEBUG) << "Graph2 finalize starts." << std::endl;
-#endif
+      if (check_duplicate) 
+        edge_buffer.merge_duplicate_values();
       std::vector<edge_id_type> permute;
       std::vector<edge_id_type> src_counting_prefix_sum;
       std::vector<edge_id_type> dest_counting_prefix_sum;
            
-#ifdef DEBUG_GRAPH
       logstream(LOG_DEBUG) << "Graph2 finalize: Sort by source vertex" << std::endl;
-#endif
       // Sort edges by source;
       // Begin of counting sort.
       counting_sort(edge_buffer.source_arr, permute, &src_counting_prefix_sum);
 
       // Inplace permute of edge_data, edge_src, edge_target array.
-#ifdef DEBUG_GRAPH
       logstream(LOG_DEBUG) << "Graph2 finalize: Inplace permute by source id" << std::endl;
-#endif
       lvid_type swap_src; lvid_type swap_target; EdgeData  swap_data;
       for (size_t i = 0; i < permute.size(); ++i) {
         if (i != permute[i]) {
@@ -246,16 +242,15 @@ namespace graphlab {
           }
         }
       }
-#ifdef DEBUG_GRAPH
-      logstream(LOG_DEBUG) << "Graph2 finalize: Sort by dest id" << std::endl;
-#endif
-      counting_sort(edge_buffer.target_arr, permute, &dest_counting_prefix_sum); 
-      // Shuffle source array
-#ifdef DEBUG_GRAPH
-      logstream(LOG_DEBUG) << "Graph2 finalize: Outofplace permute by dest id" << std::endl;
-#endif
+      // Merge duplicated edges
 
+      logstream(LOG_DEBUG) << "Graph2 finalize: Sort by dest id" << std::endl;
+      counting_sort(edge_buffer.target_arr, permute, &dest_counting_prefix_sum); 
+
+      // Shuffle source array
+      logstream(LOG_DEBUG) << "Graph2 finalize: Outofplace permute by dest id" << std::endl;
       outofplace_shuffle(edge_buffer.source_arr, permute);
+
       // Use inplace shuffle to reduce peak memory footprint:
       // inplace_shuffle(edge_buffer.source_arr, permute);
       // counting_sort(edge_buffer.target_arr, permute);
@@ -263,14 +258,12 @@ namespace graphlab {
       // warp into csr csc storage.
       _csr_storage.wrap(src_counting_prefix_sum, edge_buffer.target_arr);
       std::vector<std::pair<lvid_type, edge_id_type> > csc_value = vector_zip(edge_buffer.source_arr, permute);
-      //ASSERT_EQ(csc_value.size(), edge_buffer.size());
       _csc_storage.wrap(dest_counting_prefix_sum, csc_value); 
       edges.swap(edge_buffer.data);
       ASSERT_EQ(_csr_storage.num_values(), _csc_storage.num_values());
       ASSERT_EQ(_csr_storage.num_values(), edges.size());
-#ifdef DEBGU_GRAPH
+
       logstream(LOG_DEBUG) << "End of finalize." << std::endl;
-#endif
 
       logstream(LOG_INFO) << "Graph finalized in " << mytimer.current_time() 
                           << " secs" << std::endl;
@@ -331,6 +324,7 @@ namespace graphlab {
     void reserve_edge_space(size_t n) {
       edge_buffer.reserve_edge_space(n);
     }
+
     /**
      * \brief Creates an edge connecting vertex source to vertex target.  Any
      * existing data will be cleared. Should not be called after finalization.
@@ -531,7 +525,6 @@ namespace graphlab {
      * \internal
      * \brief Returns a list of out edges of the vertex with the given id. */
     edge_list_type out_edges(lvid_type v) {
-
       csr_type::iterator base_begin = _csr_storage.begin(v);
       csr_type::iterator base_end = _csr_storage.end(v);
 
@@ -717,7 +710,7 @@ namespace graphlab {
         source, destination, and data. Used for temporary storage. The
         data is transferred into CSR+CSC representation in
         Finalize. This will be cleared after finalized.*/
-    local_edge_buffer<VertexData, EdgeData> edge_buffer;
+    local_edge_buffer<EdgeData, check_duplicate> edge_buffer;
    
     /** Mark whether the local_graph is finalized.  Graph finalization is a
         costly procedure but it can also dramatically improve
