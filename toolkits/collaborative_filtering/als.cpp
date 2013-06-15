@@ -345,14 +345,18 @@ public:
     edge_data& edata = edge.data();
     if(edata.role == edge_data::TRAIN) {
       const vertex_type other_vertex = get_other_vertex(edge, vertex);
-      const vertex_data& vdata = vertex.data();
       const vertex_data& other_vdata = other_vertex.data();
-      const double pred = vdata.factor.dot(other_vdata.factor);
-      const float error = std::fabs(edata.obs - pred);
-      const double priority = (error * vdata.residual); 
-      // Reschedule neighbors ------------------------------------------------
-      if( priority > TOLERANCE && other_vdata.nupdates < MAX_UPDATES) 
-        context.signal(other_vertex, priority);
+      if(TOLERANCE == 0 && other_vdata.nupdates < MAX_UPDATES) { 
+        context.signal(other_vertex, 1.0); 
+      } else {
+        const vertex_data& vdata = vertex.data();
+        const double pred = vdata.factor.dot(other_vdata.factor);
+        const float error = std::fabs(edata.obs - pred);
+        const double priority = (error * vdata.residual); 
+        // Reschedule neighbors ------------------------------------------------
+        if( priority > TOLERANCE && other_vdata.nupdates < MAX_UPDATES) 
+          context.signal(other_vertex, priority);
+      }
     }
   } // end of scatter function
 
