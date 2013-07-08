@@ -61,6 +61,13 @@ int data_size = 0;
 std::string predictions;
 int rows = -1, cols = -1;
 bool quiet = false;
+   
+DECLARE_TRACER(svd_bidiagonal);
+DECLARE_TRACER(svd_error_estimate);
+DECLARE_TRACER(svd_error2);
+DECLARE_TRACER(matproduct);
+DECLARE_TRACER(svd_swork);
+DECLARE_TRACER(svd_vectors);
 
 void start_engine();
 
@@ -361,6 +368,7 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
     PRINT_VEC3("beta", beta, n-k-1);
 
     //compute svd of bidiagonal matrix
+    BEGIN_TRACEPOINT(svd_bidiagonal);
     PRINT_INT(nv);
     PRINT_NAMED_INT("svd->nconv", nconv);
     PRINT_NAMED_INT("svd->mpd", mpd);
@@ -387,8 +395,10 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
       beta(t) = 0;
     PRINT_VEC2("beta",beta);
     PRINT_MAT2("PT", PT.transpose());
+    END_TRACEPOINT(svd_bidiagonal);
 
     //estiamte the error
+    BEGIN_TRACEPOINT(svd_error_estimate);
     int kk = 0;
     for (int i=nconv; i < nv; i++){
       int j = i-nconv;
@@ -415,10 +425,11 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
       }
     }//end for
     PRINT_NAMED_INT("k",kk);
-
+    END_TRACEPOINT(svd_error_estimate)
 
     vec v;
     if (!finished){
+      BEGIN_TRACEPOINT(svd_swork);
       vec swork=get_col(PT,kk); 
       PRINT_MAT2("swork", swork);
       v = zeros(size(A,1));
@@ -427,10 +438,9 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
       }
       PRINT_VEC2("svd->V",V[nconv]);
       PRINT_VEC2("v[0]",v); 
+      END_TRACEPOINT(svd_swork);
     }
 
-
-    INITIALIZE_TRACER(matproduct, "computing ritz eigenvectors");
     //compute the ritz eigenvectors of the converged singular triplets
     if (kk > 0){
       PRINT_VEC2("svd->V", V[nconv]);
@@ -464,6 +474,8 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
   printf("\n");
   DistVec normret(info, nconv, false, "normret");
   DistVec normret_tranpose(info, nconv, true, "normret_tranpose");
+  INITIALIZE_TRACER(svd_error2, "svd error2");
+  BEGIN_TRACEPOINT(svd_error2);
   for (int i=0; i < std::min(nsv, nconv); i++){
     normret = V[i]*A._transpose() -U[i]*sigma(i);
     double n1 = norm(normret).toDouble();
@@ -481,8 +493,10 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
     PRINT_DBL(sigma(i));
     printf("Singular value %d \t%13.6g\tError estimate: %13.6g\n", i, sigma(i),err);
   }
+  END_TRACEPOINT(svd_error2);
 
   if (save_vectors){
+    BEGIN_TRACEPOINT(svd_vectors);
     if (nconv == 0)
       logstream(LOG_FATAL)<<"No converged vectors. Aborting the save operation" << std::endl;
 
@@ -498,7 +512,7 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
       pgraph->save(predictions + "V." + boost::lexical_cast<std::string>(i), linear_model_saver_V(i),
           gzip_output, save_edges, save_vertices, threads_per_machine);
     } 
-
+    END_TRACEPOINT(svd_vectors);
   }
   return sigma;
 }
@@ -526,6 +540,13 @@ void write_output_vector(const std::string datafile, const vec & output, bool is
 
 int main(int argc, char** argv) {
   global_logger().set_log_to_console(true);
+
+  INITIALIZE_TRACER(svd_bidiagonal, "svd bidiagonal");
+  INITIALIZE_TRACER(svd_error_estimate, "svd error estimate");
+  INITIALIZE_TRACER(svd_swork, "Svd swork");
+  INITIALIZE_TRACER(matproduct, "computing ritz eigenvectors");
+  INITIALIZE_TRACER(svd_bidiagonal, "svd bidiagonal");
+  INITIALIZE_TRACER(svd_vectors, "svd vectors");
 
   // Parse command line options -----------------------------------------------
   const std::string description = 
