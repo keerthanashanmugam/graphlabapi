@@ -31,6 +31,8 @@
 #include <graphlab/parallel/atomic.hpp>
 #include <graphlab/parallel/atomic_ops.hpp>
 
+#define USE_TRACEPOINT
+
 namespace graphlab{
 
 struct trace_count{

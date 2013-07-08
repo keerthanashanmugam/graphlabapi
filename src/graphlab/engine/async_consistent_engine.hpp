@@ -915,7 +915,7 @@ namespace graphlab {
       if (direct_injection == false) {
           scheduler_ptr->schedule(local_vid, message);
       }
-      END_TRACEPOINT(disteng_scheduler_task_queue);
+      //END_TRACEPOINT(disteng_scheduler_task_queue);
       consensus->cancel();
     }
 
@@ -970,7 +970,7 @@ namespace graphlab {
               vtx.local_id(), message);
           consensus->cancel();
         }
-        END_TRACEPOINT(disteng_scheduler_task_queue);
+        //END_TRACEPOINT(disteng_scheduler_task_queue);
       }
       else {
         scheduler_ptr->schedule(vtx.local_id(), message);
