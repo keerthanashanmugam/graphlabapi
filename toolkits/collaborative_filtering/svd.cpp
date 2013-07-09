@@ -61,7 +61,10 @@ int data_size = 0;
 std::string predictions;
 int rows = -1, cols = -1;
 bool quiet = false;
-   
+int nconv = 0;
+int n = 0; 
+int kk = 0;
+
 DECLARE_TRACER(svd_bidiagonal);
 DECLARE_TRACER(svd_error_estimate);
 DECLARE_TRACER(svd_error2);
@@ -307,11 +310,21 @@ void init_lanczos(graph_type * g, bipartite_graph_descriptor & info){
   logstream(LOG_INFO)<<"Allocated a total of: " << ((double)actual_vector_len * g->num_vertices() * sizeof(double)/ 1e6) << " MB for storing vectors." << std::endl;
 }
 
+void swork_vec(graph_type::vertex_type & vertex){
+  if (!info.is_square())
+    assert(vertex.id() - pcurrent->start >= 0 && vertex.id() - pcurrent->start < curvec.size());
+  //vertex.data().pvec[pcurrent->offset] = curvec[vertex.id() - pcurrent->start];
+  vertex.data().pvec[nconv+kk] = 0;
+  for (int ttt=nconv; ttt < nconv+n; ttt++){
+    vertex.data().pvec[nconv+kk] += curvec(ttt-nconv)*vertex.data().pvec[ttt];
+  }
+}  
+
+
 vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest, 
     const std::string & vecfile){
 
 
-  int nconv = 0;
   int its = 1;
   int mpd = 24;
   DistMat A(info);
@@ -333,7 +346,7 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
   while(nconv < nsv && its < max_iter){
     logstream(LOG_INFO)<<"Starting iteration: " << its << " at time: " << mytimer.current_time() << std::endl;
     int k = nconv;
-    int n = nv;
+    n  = nv;
     PRINT_INT(k);
     PRINT_INT(n);
 
@@ -399,7 +412,7 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
 
     //estiamte the error
     BEGIN_TRACEPOINT(svd_error_estimate);
-    int kk = 0;
+    kk = 0;
     for (int i=nconv; i < nv; i++){
       int j = i-nconv;
       PRINT_INT(j);
@@ -430,12 +443,15 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
     vec v;
     if (!finished){
       BEGIN_TRACEPOINT(svd_swork);
-      vec swork=get_col(PT,kk); 
-      PRINT_MAT2("swork", swork);
-      v = zeros(size(A,1));
-      for (int ttt=nconv; ttt < nconv+n; ttt++){
-        v = v+swork(ttt-nconv)*(V[ttt].to_vec());
-      }
+      curvec=get_col(PT,kk); 
+      graphlab::vertex_set nodes = pgraph->select(select_in_range);
+      pgraph->transform_vertices(swork_vec, nodes);
+      
+      PRINT_MAT2("swork", curvec);
+      //v = zeros(size(A,1));
+      //for (int ttt=nconv; ttt < nconv+n; ttt++){
+      //  v = v+swork(ttt-nconv)*(V[ttt].to_vec());
+      //}
       PRINT_VEC2("svd->V",V[nconv]);
       PRINT_VEC2("v[0]",v); 
       END_TRACEPOINT(svd_swork);
@@ -459,7 +475,7 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
     if (finished)
       break;
 
-    V[nconv]=v;
+    //V[nconv]=v;
     PRINT_VEC2("svd->V", V[nconv]);
     PRINT_NAMED_INT("svd->nconv", nconv);
 
