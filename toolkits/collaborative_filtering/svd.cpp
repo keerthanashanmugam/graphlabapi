@@ -470,11 +470,13 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
     if (kk > 0){
       PRINT_VEC2("svd->V", V[nconv]);
       BEGIN_TRACEPOINT(matproduct);
-      pcurrent = &V[nconv];
+      DistVec v = V[nconv];
+      pcurrent = &v;
       graphlab::vertex_set nodes = pgraph->select(select_in_range);
       pgraph->transform_vertices(compute_ritz, nodes);
       PRINT_VEC2("svd->V", V[nconv]);
-      pcurrent = &U[nconv];
+      v = U[nconv];
+      pcurrent = &v;
       PRINT_VEC2("svd->U", U[nconv]);
       nodes = pgraph->select(select_in_range);
       pgraph->transform_vertices(compute_ritz, nodes);
