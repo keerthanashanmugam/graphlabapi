@@ -64,6 +64,7 @@ bool quiet = false;
 int nconv = 0;
 int n = 0; 
 int kk = 0;
+mat a,PT;
 
 DECLARE_TRACER(svd_bidiagonal);
 DECLARE_TRACER(svd_error_estimate);
@@ -319,6 +320,15 @@ void swork_vec(graph_type::vertex_type & vertex){
     vertex.data().pvec[nconv+kk] += curvec(ttt-nconv)*vertex.data().pvec[ttt];
   }
 }  
+void compute_ritz(graph_type::vertex_type & vertex){
+  if (!info.is_square())
+    assert(vertex.id() - pcurrent->start >= 0);
+  assert(nconv + n < vertex.data().pvec.size());
+  vec tmp = init_vec(&vertex.data().pvec[nconv], n);
+  tmp = tmp.transpose() * (pcurrent->start == 0 ? PT : a);
+  memcpy(&vertex.data().pvec[nconv] ,&tmp[0], kk*sizeof(double)); 
+}  
+
 
 
 vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest, 
@@ -399,7 +409,6 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
     for (int i=0; i<n-1; i++)
       set_val(T, i, i+1, beta(i));
     PRINT_MAT2("T", T);
-    mat a,PT;
     svd(T, a, PT, b);
     PRINT_MAT2("Q", a);
     alpha=b.transpose();
@@ -440,7 +449,7 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
     PRINT_NAMED_INT("k",kk);
     END_TRACEPOINT(svd_error_estimate)
 
-    vec v;
+    //vec v;
     if (!finished){
       BEGIN_TRACEPOINT(svd_swork);
       curvec=get_col(PT,kk); 
@@ -453,7 +462,7 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
       //  v = v+swork(ttt-nconv)*(V[ttt].to_vec());
       //}
       PRINT_VEC2("svd->V",V[nconv]);
-      PRINT_VEC2("v[0]",v); 
+      //PRINT_VEC2("v[0]",v); 
       END_TRACEPOINT(svd_swork);
     }
 
@@ -461,13 +470,15 @@ vec lanczos(bipartite_graph_descriptor & info, timer & mytimer, vec & errest,
     if (kk > 0){
       PRINT_VEC2("svd->V", V[nconv]);
       BEGIN_TRACEPOINT(matproduct);
-      mat tmp= V.get_cols(nconv,nconv+n)*PT;
-      V.set_cols(nconv, nconv+kk, get_cols(tmp, 0, kk));
+      pcurrent = &V[nconv];
+      graphlab::vertex_set nodes = pgraph->select(select_in_range);
+      pgraph->transform_vertices(compute_ritz, nodes);
       PRINT_VEC2("svd->V", V[nconv]);
+      pcurrent = &U[nconv];
       PRINT_VEC2("svd->U", U[nconv]);
-      tmp= U.get_cols(nconv, nconv+n)*a;
+      nodes = pgraph->select(select_in_range);
+      pgraph->transform_vertices(compute_ritz, nodes);
       END_TRACEPOINT(matproduct);
-      U.set_cols(nconv, nconv+kk,get_cols(tmp,0,kk));
       PRINT_VEC2("svd->U", U[nconv]);
     }
 
